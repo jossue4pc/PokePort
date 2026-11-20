@@ -386,6 +386,10 @@ function Invoke-InstallStep {
     }
     [IO.Directory]::CreateDirectory($cacheDir) | Out-Null
     Write-TextFile $seedMarker 'pokepark-r8ae01 seed v1'
+    $versionFile = Join-Path $Root 'VERSION'
+    if (Test-Path -LiteralPath $versionFile) {
+        Write-TextFile (Join-Path $StateDir 'built_version.txt') ((Get-Content -LiteralPath $versionFile -Raw).Trim())
+    }
     Progress 100
     Done 'install'
 }
@@ -396,6 +400,15 @@ $main = {
     $steps = @('toolchain', 'deps', 'disc', 'translate', 'build', 'install')
     try {
         if ($Clean) { Reset-StepsFrom $steps }
+        # Sources of another version (an update, or files copied by hand): translate, build and install again.
+        $versionFile = Join-Path $Root 'VERSION'
+        $currentVersion = $(if (Test-Path -LiteralPath $versionFile) { (Get-Content -LiteralPath $versionFile -Raw).Trim() } else { '' })
+        $builtFile = Join-Path $StateDir 'built_version.txt'
+        $builtVersion = $(if (Test-Path -LiteralPath $builtFile) { (Get-Content -LiteralPath $builtFile -Raw).Trim() } else { '' })
+        if ($currentVersion -ne $builtVersion) {
+            Reset-StepsFrom @('translate', 'build', 'install')
+            Info "Version $currentVersion differs from the built version '$builtVersion': rebuilding."
+        }
         # A different image (or a missing extraction) is read again; the same one is not re-extracted.
         $source = $(if ($ExtractedDir) { 'dir:' + [IO.Path]::GetFullPath($ExtractedDir) } elseif ($Disc) { 'img:' + [IO.Path]::GetFullPath($Disc) } else { $null })
         $recorded = Join-Path $StateDir 'disc_source.txt'

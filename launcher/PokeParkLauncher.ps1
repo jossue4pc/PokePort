@@ -85,6 +85,8 @@ $S.ShareShaders  = T 'Compartir caché de shaders' 'Share shader cache'
 $S.ShareDone     = T 'Listo: {0}{1}{1}Envíalo al autor del port (o adjúntalo en un issue de GitHub). Solo contiene la lista de efectos gráficos que ya se prepararon en tu PC; nada de tus partidas ni del juego. Con estas listas el port compila los shaders al arrancar y nadie tiene tirones la primera vez.' 'Done: {0}{1}{1}Send it to the port author (or attach it to a GitHub issue). It only lists the graphics effects already prepared on your PC; no saves or game data. These lists let the port compile shaders at start so nobody stutters the first time.'
 $S.ShareEmpty    = T 'Todavía no hay caché de shaders: juega un rato primero.' 'There is no shader cache yet: play for a while first.'
 
+$S.NeedsRebuild  = T 'Hay archivos de la versión {0}: pulsa Reinstalar para aplicarla (unos minutos; tu partida se conserva). Mientras tanto puedes jugar con la versión anterior.' 'Files of version {0} are present: press Rebuild to apply it (a few minutes; your saves are kept). Until then you can keep playing the previous build.'
+
 $RepoApi = 'https://api.github.com/repos/jossue4pc/PokePort/releases/latest'
 # Test hook: point the update check at another endpoint (e.g. a local server with a fake release).
 if ($env:POKEPORT_UPDATE_API) { $RepoApi = $env:POKEPORT_UPDATE_API }
@@ -235,7 +237,12 @@ foreach ($name in @('TitleText','SubtitleText','DiscHeader','DiscBox','BrowseBut
     $ui[$name] = $window.FindName($name)
 }
 $iconPath = Join-Path $PSScriptRoot 'assets\icon.ico'
-if (Test-Path $iconPath) { $window.Icon = [Windows.Media.Imaging.BitmapFrame]::Create([Uri]$iconPath) }
+if (Test-Path $iconPath) {
+    # Decode from memory: a file-backed BitmapFrame keeps icon.ico locked, and the updater must be able to replace it.
+    $iconStream = New-Object IO.MemoryStream(, [IO.File]::ReadAllBytes($iconPath))
+    $window.Icon = [Windows.Media.Imaging.BitmapFrame]::Create($iconStream, [Windows.Media.Imaging.BitmapCreateOptions]::None,
+        [Windows.Media.Imaging.BitmapCacheOption]::OnLoad)
+}
 
 $ui.TitleText.Text = $S.Title
 $ui.SubtitleText.Text = $S.Subtitle
@@ -375,6 +382,13 @@ function Update-InstalledState {
         foreach ($id in $S.Steps.Keys) { Set-StepState $id 'done' }
         Set-Progress 100
         $ui.StatusText.Text = $S.Ready
+        # The game was built from another version (e.g. new files copied by hand): ask for a rebuild.
+        $builtFile = Join-Path $LogDir 'state\built_version.txt'
+        $built = $(if (Test-Path $builtFile) { (Get-Content -LiteralPath $builtFile -Raw).Trim() } else { '' })
+        if ($built -ne $LocalVersion) {
+            foreach ($id in @('translate', 'build', 'install')) { Set-StepState $id 'pending' }
+            $ui.StatusText.Text = $S.NeedsRebuild -f "v$LocalVersion"
+        }
     } else {
         Set-Progress 0
         $ui.StatusText.Text = $S.NotInstalled

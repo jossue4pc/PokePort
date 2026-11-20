@@ -55,14 +55,14 @@ function Get-FileIndex([string]$Base, [string[]]$Dirs, [string[]]$Files) {
         Get-ChildItem -LiteralPath $full -Recurse -File -Force | ForEach-Object {
             $rel = $_.FullName.Substring($Base.Length).TrimStart('\')
             if ($rel -like 'src\generated\*' -or $rel -match '\\(bin|obj)\\') { return }
-            $index[$rel.ToLowerInvariant()] = @{ Hash = (Get-Sha256 $_.FullName); Time = $_.LastWriteTimeUtc }
+            $index[$rel.ToLowerInvariant()] = @{ Rel = $rel; Hash = (Get-Sha256 $_.FullName); Time = $_.LastWriteTimeUtc }
         }
     }
     foreach ($file in $Files) {
         $full = Join-Path $Base $file
         if (Test-Path -LiteralPath $full) {
             $item = Get-Item -LiteralPath $full -Force
-            $index[$file.ToLowerInvariant()] = @{ Hash = (Get-Sha256 $full); Time = $item.LastWriteTimeUtc }
+            $index[$file.ToLowerInvariant()] = @{ Rel = $file; Hash = (Get-Sha256 $full); Time = $item.LastWriteTimeUtc }
         }
     }
     return $index
@@ -106,6 +106,40 @@ function Copy-Managed([string]$From, [string]$To) {
         $source = Join-Path $From $file
         if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination (Join-Path $To $file) -Force }
     }
+}
+
+# Makes the managed files of $To identical to $From, file by file: identical files are not touched (no
+# rewrite, no lock conflict, timestamps kept so the next build only recompiles what changed), changed files
+# are overwritten and dated now, files that no longer exist are deleted. Returns the number of changed files.
+function Sync-Managed([string]$From, [string]$To) {
+    $source = Get-FileIndex $From $ManagedDirs $ManagedFiles
+    $target = Get-FileIndex $To $ManagedDirs $ManagedFiles
+    $now = (Get-Date).ToUniversalTime()
+    $changed = 0
+    foreach ($key in $source.Keys) {
+        $entry = $source[$key]
+        $current = $target[$key]
+        if ($current -and $current.Hash -eq $entry.Hash) { continue }
+        $destination = Join-Path $To $entry.Rel
+        [IO.Directory]::CreateDirectory((Split-Path -Parent $destination)) | Out-Null
+        Copy-Item -LiteralPath (Join-Path $From $entry.Rel) -Destination $destination -Force -ErrorAction Stop
+        [IO.File]::SetLastWriteTimeUtc($destination, $now)
+        $changed++
+    }
+    foreach ($key in $target.Keys) {
+        if ($source.ContainsKey($key)) { continue }
+        Remove-Item -LiteralPath (Join-Path $To $target[$key].Rel) -Force -ErrorAction Stop
+        $changed++
+    }
+    # Directories left empty by deleted files (never src\generated).
+    foreach ($dir in $ManagedDirs) {
+        $full = Join-Path $To $dir
+        if (-not (Test-Path -LiteralPath $full)) { continue }
+        Get-ChildItem -LiteralPath $full -Recurse -Directory -Force | Sort-Object { $_.FullName.Length } -Descending |
+            Where-Object { $_.FullName -notmatch '\\src\\generated(\\|$)' -and -not (Get-ChildItem -LiteralPath $_.FullName -Force) } |
+            ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+    }
+    return $changed
 }
 
 function Get-PinnedLines([string]$File, [string]$Pattern) {
@@ -159,33 +193,16 @@ try {
     if (Test-Path (Join-Path $Root 'VERSION')) { $oldVersion = (Get-Content -LiteralPath (Join-Path $Root 'VERSION') -Raw).Trim() }
     $backupDir = Join-Path $BuildRoot ("backup\v$oldVersion-{0:yyyyMMdd_HHmmss}" -f (Get-Date))
     Copy-Managed $Root $backupDir
-    $oldIndex = Get-FileIndex $Root $ManagedDirs $ManagedFiles
     $oldDeps = Get-PinnedLines (Join-Path $Root 'src\Launcher\Prepare-Dependencies.ps1') 'https://|Uris|Pins'
     $oldToolchain = Get-PinnedLines (Join-Path $Root 'launcher\Build-PokePark.ps1') '^\$(LlvmMingw|CMake|Ninja|Dotnet)Version'
     Progress 60
 
-    # 4. Replace
+    # 4. Replace, file by file
     Step "Installing $Tag"
     $replacing = $true
-    Remove-Managed $Root
-    Copy-Managed $newRoot.FullName $Root
+    $changed = Sync-Managed $newRoot.FullName $Root
     $replacing = $false
     Progress 80
-
-    # 5. Keep timestamps of unchanged files; date changed ones now
-    $now = (Get-Date).ToUniversalTime()
-    $newIndex = Get-FileIndex $Root $ManagedDirs $ManagedFiles
-    $changed = 0
-    foreach ($rel in $newIndex.Keys) {
-        $path = Join-Path $Root $rel
-        $old = $oldIndex[$rel]
-        if ($old -and $old.Hash -eq $newIndex[$rel].Hash) {
-            [IO.File]::SetLastWriteTimeUtc($path, $old.Time)
-        } else {
-            [IO.File]::SetLastWriteTimeUtc($path, $now)
-            $changed++
-        }
-    }
     Out-Line "$changed file(s) changed."
 
     # The game is rebuilt from the new sources; the disc stays extracted.
@@ -206,11 +223,9 @@ try {
 } catch {
     $message = $_.Exception.Message
     if ($replacing -and $backupDir -and (Test-Path -LiteralPath $backupDir)) {
-        # Best effort: remove what can be removed (new files must not linger), then copy every file of the
-        # backup back over the folder. A file that could not be deleted still holds its old content.
-        try { Remove-Managed $Root } catch {}
+        # Sync the folder back to the backup (only files that differ are touched).
         try {
-            Copy-Managed $backupDir $Root
+            Sync-Managed $backupDir $Root | Out-Null
             $message += ' The previous version was restored.'
         } catch {
             $message += " Restoring the backup also failed: $($_.Exception.Message). Backup kept in $backupDir."
