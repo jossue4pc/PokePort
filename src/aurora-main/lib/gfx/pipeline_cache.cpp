@@ -564,7 +564,7 @@ static PipelineRef find_pipeline_impl(PipelineRef runtimeKey, HashType cacheKey,
   }
 
   if (notifyWorker) {
-    g_pipelineQueueCv.notify_one();
+    g_pipelineQueueCv.notify_all(); // all: a worker above the runtime limit would swallow notify_one (deadlock)
   }
 
   // Queue the whole recorded pass before waiting. Encoding still waits for
@@ -1294,7 +1294,7 @@ bool get_pipeline(PipelineRef ref, CompiledPipeline& pipeline) {
   } else if (t_requireReadyPipelines && g_hasPipelineThread && !g_pipelines.contains(ref) &&
              g_pendingPipelines.contains(ref)) {
     move_pending_pipeline_to_front(ref);
-    g_pipelineQueueCv.notify_one();
+    g_pipelineQueueCv.notify_all(); // all: see above; the renderer waits for this pipeline
     g_pipelineReadyCv.wait(guard, [=] {
       return g_pipelines.contains(ref) || !g_pendingPipelines.contains(ref) || g_pipelineThreadEnd;
     });
