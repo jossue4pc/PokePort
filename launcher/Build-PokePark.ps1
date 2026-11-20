@@ -238,6 +238,8 @@ function Invoke-DiscStep {
         throw "Unsupported game version (main.dol SHA-256 $hash). The port supports PokePark Wii (USA, Rev 0)."
     }
     Info 'Game version verified (USA, Rev 0).'
+    $sourceRecord = $(if ($ExtractedDir) { 'dir:' + [IO.Path]::GetFullPath($ExtractedDir) } else { 'img:' + [IO.Path]::GetFullPath($Disc) })
+    Write-TextFile (Join-Path $StateDir 'disc_source.txt') $sourceRecord
     Reset-StepsFrom @('translate', 'build', 'install')
     Progress 20
     Done 'disc'
@@ -339,20 +341,36 @@ function Invoke-InstallStep {
     [IO.Directory]::CreateDirectory($InstallDir) | Out-Null
     $exe = Join-Path $NativeDir 'WiiCompiled.exe'
     if (-not (Test-Path $exe)) { throw 'The executable was not built.' }
-    Copy-Item -LiteralPath $exe -Destination (Join-Path $InstallDir 'PokePark.exe') -Force
-    Get-ChildItem -LiteralPath $NativeDir -Filter '*.dll' | Copy-Item -Destination $InstallDir -Force
+    # Stage everything first, then rename each file over the old one: a failure (for example the game
+    # still running) leaves the previous, working PokePark.exe untouched.
+    $staging = Join-Path $InstallDir '.staging'
+    if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force }
+    [IO.Directory]::CreateDirectory($staging) | Out-Null
+    Copy-Item -LiteralPath $exe -Destination (Join-Path $staging 'PokePark.exe') -Force
+    Get-ChildItem -LiteralPath $NativeDir -Filter '*.dll' | Copy-Item -Destination $staging -Force
     # Audio DSP coefficient ROM (Dolphin's free replacement) and aurora's initial pipeline cache.
     foreach ($file in @('dsp_coef.bin', 'initial_pipeline_cache.db')) {
         $path = Join-Path $NativeDir $file
-        if (Test-Path -LiteralPath $path) { Copy-Item -LiteralPath $path -Destination $InstallDir -Force }
+        if (Test-Path -LiteralPath $path) { Copy-Item -LiteralPath $path -Destination $staging -Force }
     }
-    if (-not (Test-Path (Join-Path $InstallDir 'dsp_coef.bin'))) {
-        Copy-Item -LiteralPath (Join-Path $Src 'runtime\assets\dsp\dsp_coef.bin') -Destination $InstallDir -Force
+    if (-not (Test-Path (Join-Path $staging 'dsp_coef.bin'))) {
+        Copy-Item -LiteralPath (Join-Path $Src 'runtime\assets\dsp\dsp_coef.bin') -Destination $staging -Force
     }
-    if (Test-Path (Join-Path $NativeDir 'wii_bootstrap')) {
-        Copy-Item -LiteralPath (Join-Path $NativeDir 'wii_bootstrap') -Destination $InstallDir -Recurse -Force
+    $running = Get-Process -Name 'PokePark' -ErrorAction SilentlyContinue |
+        Where-Object { $_.Path -and $_.Path.StartsWith($InstallDir, [StringComparison]::OrdinalIgnoreCase) }
+    if ($running) { throw 'PokePark is running. Close the game and try again.' }
+    foreach ($file in Get-ChildItem -LiteralPath $staging -File) {
+        Move-Item -LiteralPath $file.FullName -Destination (Join-Path $InstallDir $file.Name) -Force
     }
-    Copy-Item -LiteralPath (Join-Path $Root 'fonts') -Destination $InstallDir -Recurse -Force
+    Remove-Item -LiteralPath $staging -Recurse -Force
+    # Copy folder contents (copying a folder onto an existing one would nest it: fonts\fonts).
+    $folders = @(@{ From = (Join-Path $NativeDir 'wii_bootstrap'); To = (Join-Path $InstallDir 'wii_bootstrap') },
+                 @{ From = (Join-Path $Root 'fonts'); To = (Join-Path $InstallDir 'fonts') })
+    foreach ($folder in $folders) {
+        if (-not (Test-Path -LiteralPath $folder.From)) { continue }
+        [IO.Directory]::CreateDirectory($folder.To) | Out-Null
+        Copy-Item -Path (Join-Path $folder.From '*') -Destination $folder.To -Recurse -Force
+    }
     Set-Content -LiteralPath (Join-Path $InstallDir 'portable.txt') -Value 'Settings, saves and caches live in UserData next to this file.'
     $userData = Join-Path $InstallDir 'UserData'
     [IO.Directory]::CreateDirectory($userData) | Out-Null
@@ -367,7 +385,13 @@ $main = {
     $steps = @('toolchain', 'deps', 'disc', 'translate', 'build', 'install')
     try {
         if ($Clean) { Reset-StepsFrom $steps }
-        if ($Disc -or $ExtractedDir) { Reset-StepsFrom @('disc') }   # a new image always re-validates
+        # A different image (or a missing extraction) is read again; the same one is not re-extracted.
+        $source = $(if ($ExtractedDir) { 'dir:' + [IO.Path]::GetFullPath($ExtractedDir) } elseif ($Disc) { 'img:' + [IO.Path]::GetFullPath($Disc) } else { $null })
+        $recorded = Join-Path $StateDir 'disc_source.txt'
+        $previous = $(if (Test-Path -LiteralPath $recorded) { (Get-Content -LiteralPath $recorded -Raw).Trim() } else { $null })
+        if ($source -and ($source -ne $previous -or -not (Test-Path (Join-Path $GameDir 'sys\main.dol')))) {
+            Reset-StepsFrom @('disc')
+        }
         foreach ($id in $steps) {
             if ($Step -ne 'all' -and $Step -ne $id) { continue }
             if ($Step -eq 'all' -and (Test-StepDone $id)) { Info "Step '$id' already done."; Done $id; continue }

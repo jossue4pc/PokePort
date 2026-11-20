@@ -48,6 +48,14 @@ Todo queda dentro de la carpeta del repositorio: `PokePark\` es el juego listo (
 
 Se cambian en **F10 → Controller settings → Wii Remote (virtual)**.
 
+## Actualizaciones
+Al abrirse, el lanzador comprueba si hay una versión nueva en GitHub (también con el botón **Buscar actualizaciones**).
+Si la hay, muestra un aviso con **Ver notas**, **Actualizar**, **Ahora no** u **Omitir esta versión**. Al actualizar:
+- descarga el release y comprueba su integridad (SHA-256) antes de tocar nada;
+- guarda una copia de seguridad (`.build\backup`) y, si algo falla a mitad, restaura la versión anterior;
+- **no toca** tus partidas ni ajustes (`PokePark\UserData`), tu disco extraído ni las herramientas descargadas;
+- recompila solo lo que cambió; el `PokePark.exe` anterior sigue funcionando hasta que el nuevo compila bien.
+
 ## Problemas conocidos
 - En el **primer arranque** puede aparecer «Game 1 data is corrupted». Elige **Yes**: se crea la partida y no vuelve a salir.
 - Las miniaturas de «Choose Your Picture» se ven vacías en una partida nueva.
@@ -87,6 +95,11 @@ PokéPark Wii (USA, Rev 0) disc image.
 **How to play:** download the latest `PokePort-vX.Y.Z.zip` from **[Releases](../../releases)** (or Code → Download ZIP), extract it to a simple path (e.g.
 `C:\Games\PokePort`), run `PokeParkLauncher.bat`, pick your disc image (or an extracted folder with `sys\main.dol`
 and `files\`), press **Install** (15–40 minutes the first time) and then **▶ PLAY**.
+
+**Updates:** the launcher checks GitHub for a new release on start (or with **Check for updates**) and offers **Release
+notes / Update / Not now / Skip this version**. Updating verifies the download (SHA-256), backs up the current version
+and restores it if anything fails, never touches your saves, settings, extracted disc or toolchain, and rebuilds only
+what changed — the previous `PokePark.exe` keeps working until the new one builds.
 
 **Known issues:** on the very first boot the game may say "Game 1 data is corrupted" — answer **Yes**, it creates the
 save and won't ask again. "Choose Your Picture" thumbnails are empty on a new game.

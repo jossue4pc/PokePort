@@ -1,6 +1,10 @@
 ﻿# PokePark Wii PC Port - launcher (Windows PowerShell 5.1 + WPF, no installation required).
 # Original artwork only: no Nintendo / Pokemon logos or characters are used or shipped.
-Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Windows.Forms
+param(
+    # Set by the launcher itself after an update: rebuild the game automatically.
+    [switch]$AfterUpdate
+)
+Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Windows.Forms, System.Net.Http
 
 $ErrorActionPreference = 'Stop'
 $Root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
@@ -52,6 +56,32 @@ $S = @{
     }
 }
 
+
+$S.CheckUpdates  = T 'Buscar actualizaciones' 'Check for updates'
+$S.Checking      = T 'Buscando...' 'Checking...'
+$S.NewVersion    = T 'Nueva versión disponible: {0}' 'New version available: {0}'
+$S.SeeNotes      = T 'Ver notas' 'Release notes'
+$S.UpdateNow     = T 'Actualizar' 'Update'
+$S.Later         = T 'Ahora no' 'Not now'
+$S.Skip          = T 'Omitir esta versión' 'Skip this version'
+$S.UpToDate      = T 'Ya tienes la última versión ({0}).' 'You have the latest version ({0}).'
+$S.CheckFailed   = T 'No se pudo consultar GitHub: {0}' 'Could not reach GitHub: {0}'
+$S.Updating      = T 'Actualizando PokePort...' 'Updating PokePort...'
+$S.UpdateDone    = T 'Actualización descargada. El lanzador se reiniciará y recompilará el juego (tu partida y ajustes se conservan).' 'Update downloaded. The launcher will restart and rebuild the game (your saves and settings are kept).'
+$S.UpdateFailed  = T 'La actualización falló' 'The update failed'
+$S.CloseGame     = T 'Cierra PokéPark antes de continuar.' 'Close PokéPark before continuing.'
+$S.Busy          = T 'Espera a que termine la tarea en curso.' 'Wait for the current task to finish.'
+$S.Rebuilding    = T 'Aplicando la actualización: recompilando solo lo que cambió...' 'Applying the update: rebuilding only what changed...'
+$S.NotesTitle    = T 'Novedades de {0}' 'What is new in {0}'
+$S.Close         = T 'Cerrar' 'Close'
+
+$RepoApi = 'https://api.github.com/repos/jossue4pc/PokePort/releases/latest'
+# Test hook: point the update check at another endpoint (e.g. a local server with a fake release).
+if ($env:POKEPORT_UPDATE_API) { $RepoApi = $env:POKEPORT_UPDATE_API }
+$VersionFile = Join-Path $Root 'VERSION'
+$LocalVersion = $(if (Test-Path $VersionFile) { (Get-Content -LiteralPath $VersionFile -Raw).Trim() } else { '0.0.0' })
+$UpdateScript = Join-Path $PSScriptRoot 'Update-PokePort.ps1'
+
 # --- Window ------------------------------------------------------------------------------------------
 [xml]$xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -93,9 +123,14 @@ $S = @{
       <Ellipse Canvas.Left="420" Canvas.Top="575" Width="820" Height="260" Fill="#5FB33F"/>
     </Canvas>
     <Grid Margin="28,18,28,18">
-      <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+      <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
       <!-- Header -->
       <Border Grid.Row="0" CornerRadius="26" Background="#FFD93B" BorderBrush="#E3A000" BorderThickness="0,0,0,5" Padding="20,10">
+        <DockPanel>
+          <StackPanel DockPanel.Dock="Right" VerticalAlignment="Center" HorizontalAlignment="Right">
+            <TextBlock x:Name="VersionText" HorizontalAlignment="Right" FontSize="12" FontWeight="Bold" Foreground="#5A4300" Margin="0,0,4,4"/>
+            <Button x:Name="CheckUpdatesButton" Style="{StaticResource Pill}" Background="#2B4CA3" FontSize="12" Padding="12,5"/>
+          </StackPanel>
         <StackPanel Orientation="Horizontal">
           <Grid Width="58" Height="58" Margin="0,0,16,0">
             <Ellipse Fill="White"/><Ellipse Margin="5" Fill="#FFB400"/>
@@ -106,9 +141,22 @@ $S = @{
             <TextBlock x:Name="SubtitleText" FontSize="13" Foreground="#5A4300"/>
           </StackPanel>
         </StackPanel>
+        </DockPanel>
+      </Border>
+      <!-- Update banner -->
+      <Border x:Name="UpdateBanner" Grid.Row="1" Visibility="Collapsed" CornerRadius="18" Background="#2B4CA3" Padding="16,10" Margin="0,12,0,0">
+        <DockPanel>
+          <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+            <Button x:Name="NotesButton" Style="{StaticResource Pill}" Background="#7A8CC4" FontSize="12" Padding="12,5" Margin="6,0,0,0"/>
+            <Button x:Name="UpdateButton" Style="{StaticResource Pill}" Background="#2FA84F" FontSize="12" Padding="14,5" Margin="6,0,0,0"/>
+            <Button x:Name="LaterButton" Style="{StaticResource Pill}" Background="#5C6F9E" FontSize="12" Padding="12,5" Margin="6,0,0,0"/>
+            <Button x:Name="SkipButton" Style="{StaticResource Pill}" Background="#5C6F9E" FontSize="12" Padding="12,5" Margin="6,0,0,0"/>
+          </StackPanel>
+          <TextBlock x:Name="UpdateText" VerticalAlignment="Center" Foreground="White" FontSize="14" FontWeight="Bold" TextWrapping="Wrap"/>
+        </DockPanel>
       </Border>
       <!-- Body -->
-      <Grid Grid.Row="1" Margin="0,16,0,10">
+      <Grid Grid.Row="2" Margin="0,16,0,10">
         <Grid.ColumnDefinitions><ColumnDefinition Width="3*"/><ColumnDefinition Width="18"/><ColumnDefinition Width="2*"/></Grid.ColumnDefinitions>
         <Border Grid.Column="0" CornerRadius="22" Background="#F2FFFFFF" Padding="20">
           <StackPanel>
@@ -154,7 +202,7 @@ $S = @{
           </DockPanel>
         </Border>
       </Grid>
-      <TextBlock x:Name="LegalText" Grid.Row="2" FontSize="11" Foreground="#F4FFF0" TextWrapping="Wrap" TextAlignment="Center"/>
+      <TextBlock x:Name="LegalText" Grid.Row="3" FontSize="11" Foreground="#F4FFF0" TextWrapping="Wrap" TextAlignment="Center"/>
     </Grid>
   </Grid>
 </Window>
@@ -163,7 +211,8 @@ $window = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader
 $ui = @{}
 foreach ($name in @('TitleText','SubtitleText','DiscHeader','DiscBox','BrowseButton','BrowseDirButton','DiscHint','StepsHeader','StepsPanel',
                     'ProgressFill','ProgressText','StatusText','PlayButton','InstallButton','FolderButton','ShortcutButton','OptionsHeader',
-                    'Native60Box','WidescreenBox','FullscreenBox','ResolutionLabel','ResolutionBox','InGameText','LogButton','LogBox','LegalText')) {
+                    'Native60Box','WidescreenBox','FullscreenBox','ResolutionLabel','ResolutionBox','InGameText','LogButton','LogBox','LegalText',
+                    'VersionText','CheckUpdatesButton','UpdateBanner','UpdateText','NotesButton','UpdateButton','LaterButton','SkipButton')) {
     $ui[$name] = $window.FindName($name)
 }
 $iconPath = Join-Path $PSScriptRoot 'assets\icon.ico'
@@ -222,11 +271,20 @@ function Set-Progress([int]$Percent) {
 }
 
 # --- Settings (launcher + game config) ---------------------------------------------------------------
+$script:skippedVersion = ''
 function Get-LauncherSettings {
-    if (Test-Path $SettingsPath) { try { return Get-Content $SettingsPath -Raw | ConvertFrom-Json } catch {} }
+    if (Test-Path $SettingsPath) {
+        try {
+            $loaded = Get-Content $SettingsPath -Raw | ConvertFrom-Json
+            if ($loaded.PSObject.Properties['skip']) { $script:skippedVersion = [string]$loaded.skip }
+            return $loaded
+        } catch {}
+    }
     return [pscustomobject]@{ disc = '' }
 }
-function Save-LauncherSettings { [pscustomobject]@{ disc = $ui.DiscBox.Text } | ConvertTo-Json | Set-Content $SettingsPath }
+function Save-LauncherSettings {
+    [pscustomobject]@{ disc = $ui.DiscBox.Text; skip = $script:skippedVersion } | ConvertTo-Json | Set-Content $SettingsPath
+}
 
 function Get-ConfigText { if (Test-Path $ConfigPath) { ([IO.File]::ReadAllText($ConfigPath)).TrimStart([char]0xFEFF) } else { '' } }
 function Set-ConfigValue([string]$Section, [string]$Key, [string]$Value) {
@@ -338,7 +396,8 @@ function Read-NewLogLines {
                 $parts = $raw.Substring(7).Split(' ', 2)
                 $script:currentStep = $parts[0]
                 Set-StepState $parts[0] 'running'
-                $ui.StatusText.Text = $S.Steps[$parts[0]] + '...'
+                $label = $(if ($S.Steps.Contains($parts[0])) { $S.Steps[$parts[0]] } elseif ($parts.Count -gt 1) { $parts[1] } else { $parts[0] })
+                $ui.StatusText.Text = $label + '...'
             } elseif ($raw.StartsWith('##DONE ')) {
                 Set-StepState $raw.Substring(7).Trim() 'done'
             } elseif ($raw.StartsWith('##PROGRESS ')) {
@@ -368,15 +427,29 @@ $timer.Add_Tick({
         $timer.Stop()
         $script:exitCode = $script:process.ExitCode
         $script:process = $null
-        $ui.InstallButton.IsEnabled = $true
-        $ui.BrowseButton.IsEnabled = $true
-        $ui.BrowseDirButton.IsEnabled = $true
         if (-not $script:failed -and -not $script:finished) {
             # The installer stopped without reporting success or a specific error.
             $script:failed = $true
             $code = $(try { $script:exitCode } catch { '?' })
             $ui.StatusText.Text = (T 'El instalador se detuvo sin terminar' 'The installer stopped before finishing') + " (exit $code). " + (T 'Mira el registro.' 'See the log.')
             if ($script:currentStep) { Set-StepState $script:currentStep 'error' }
+        }
+        Set-Busy $false
+        if ($script:mode -eq 'update') {
+            if (-not $script:failed) {
+                [Windows.MessageBox]::Show($window, $S.UpdateDone, $S.Title) | Out-Null
+                # The launcher's own files were replaced: start the new one and let it rebuild.
+                Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -ArgumentList @(
+                    '-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-WindowStyle', 'Hidden',
+                    '-File', (Format-Arg (Join-Path $Root 'launcher\PokeParkLauncher.ps1')), '-AfterUpdate')
+                $script:restarting = $true
+                $window.Close()
+                return
+            }
+            $ui.LogBox.Visibility = 'Visible'
+            $ui.StatusText.Text = "$($S.UpdateFailed): " + $ui.StatusText.Text
+            $ui.PlayButton.IsEnabled = (Test-Path $GameExe)
+            return
         }
         if (-not $script:failed) {
             Update-InstalledState
@@ -389,40 +462,194 @@ $timer.Add_Tick({
     }
 })
 
-$ui.InstallButton.Add_Click({
-    $disc = $ui.DiscBox.Text.Trim()
-    if (-not $disc) { [Windows.MessageBox]::Show($window, $S.NeedDisc, $S.Title) | Out-Null; return }
-    Save-LauncherSettings
-    foreach ($id in $S.Steps.Keys) { Set-StepState $id 'pending' }
-    Set-Progress 0
-    $ui.LogBox.Clear()
-    $script:failed = $false
-    $script:currentStep = $null
-    $ui.StatusText.Text = $S.Working
-    $ui.InstallButton.IsEnabled = $false
-    $ui.PlayButton.IsEnabled = $false
-    $ui.BrowseButton.IsEnabled = $false
-    $ui.BrowseDirButton.IsEnabled = $false
-    $script:logPath = Join-Path $LogDir ("build_{0:yyyyMMdd_HHmmss}.log" -f (Get-Date))
+# Command-line quoting for a Windows path (paths cannot contain '"'; a trailing '\' would escape the quote).
+function Format-Arg([string]$Value) { '"' + $Value.TrimEnd('\') + '"' }
+
+function Test-GameRunning {
+    $running = Get-Process -Name 'PokePark' -ErrorAction SilentlyContinue |
+        Where-Object { $_.Path -and $_.Path.StartsWith($InstallDir, [StringComparison]::OrdinalIgnoreCase) }
+    return [bool]$running
+}
+
+function Set-Busy([bool]$Busy) {
+    foreach ($b in @($ui.InstallButton, $ui.BrowseButton, $ui.BrowseDirButton, $ui.CheckUpdatesButton, $ui.UpdateButton)) { $b.IsEnabled = -not $Busy }
+    if ($Busy) { $ui.PlayButton.IsEnabled = $false }
+}
+
+# Runs a PowerShell script hidden; its "##" lines are followed through -LogFile by the timer.
+function Start-Worker([string]$Mode, [string]$ScriptFile, [string]$Arguments) {
+    $script:mode = $Mode
+    $script:logPath = Join-Path $LogDir ("{0}_{1:yyyyMMdd_HHmmss}.log" -f $Mode, (Get-Date))
     $script:logOffset = 0
     $script:finished = $false
-    # Command-line quoting for a Windows path (paths cannot contain '"'; a trailing '\' would escape the quote).
-    $quote = { param([string]$Value) '"' + $Value.TrimEnd('\') + '"' }
-    $discArg = $(if (Test-Path -LiteralPath $disc -PathType Container) { '-ExtractedDir ' + (& $quote $disc) } else { '-Disc ' + (& $quote $disc) })
+    $script:failed = $false
+    $script:currentStep = $null
+    $ui.LogBox.Clear()
     $startInfo = New-Object Diagnostics.ProcessStartInfo 'powershell.exe'
     # -File passes each value verbatim (no PowerShell re-parsing), so spaces and apostrophes in names are safe.
-    $startInfo.Arguments = '-NoProfile -ExecutionPolicy Bypass -File ' + (& $quote $BuildScript) + ' ' + $discArg + ' -LogFile ' + (& $quote $script:logPath)
+    $startInfo.Arguments = '-NoProfile -ExecutionPolicy Bypass -File ' + (Format-Arg $ScriptFile) + ' ' + $Arguments + ' -LogFile ' + (Format-Arg $script:logPath)
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $true
+    Set-Busy $true
     try {
         $script:process = [Diagnostics.Process]::Start($startInfo)
     } catch {
         $script:failed = $true
         $ui.StatusText.Text = "$($S.Failed): $($_.Exception.Message)"
-        $ui.InstallButton.IsEnabled = $true; $ui.BrowseButton.IsEnabled = $true; $ui.BrowseDirButton.IsEnabled = $true
-        return
+        Set-Busy $false
+        $ui.PlayButton.IsEnabled = (Test-Path $GameExe)
+        return $false
     }
     $timer.Start()
+    return $true
+}
+
+function Start-Build {
+    if ($script:process) { [Windows.MessageBox]::Show($window, $S.Busy, $S.Title) | Out-Null; return }
+    if (Test-GameRunning) { [Windows.MessageBox]::Show($window, $S.CloseGame, $S.Title) | Out-Null; return }
+    $disc = $ui.DiscBox.Text.Trim()
+    if (-not $disc) { [Windows.MessageBox]::Show($window, $S.NeedDisc, $S.Title) | Out-Null; return }
+    Save-LauncherSettings
+    foreach ($id in $S.Steps.Keys) { Set-StepState $id 'pending' }
+    Set-Progress 0
+    $ui.StatusText.Text = $S.Working
+    $discArg = $(if (Test-Path -LiteralPath $disc -PathType Container) { '-ExtractedDir ' + (Format-Arg $disc) } else { '-Disc ' + (Format-Arg $disc) })
+    [void](Start-Worker 'build' $BuildScript $discArg)
+}
+
+$ui.InstallButton.Add_Click({ Start-Build })
+
+# --- Updates (GitHub releases) ------------------------------------------------------------------------
+function ConvertTo-VersionObject([string]$Text) {
+    $clean = ($Text -replace '^[vV]', '') -replace '[^0-9.].*$', ''
+    try { return [version]$clean } catch { return [version]'0.0' }
+}
+
+function ConvertFrom-ReleaseNotes([string]$Markdown) {
+    # Plain text for the notes window: drop the markdown that would only add noise.
+    $text = $Markdown -replace '\*\*', '' -replace '`', '' -replace '(?m)^#+\s*', '' -replace '\[([^\]]+)\]\([^)]+\)', '$1'
+    return $text.Trim()
+}
+
+$script:latestRelease = $null
+$script:updateTask = $null
+$script:updateManual = $false
+$updateTimer = New-Object Windows.Threading.DispatcherTimer
+$updateTimer.Interval = [TimeSpan]::FromMilliseconds(200)
+
+function Start-UpdateCheck([bool]$Manual) {
+    if ($script:updateTask) { return }
+    $script:updateManual = $Manual
+    if ($Manual) { $ui.CheckUpdatesButton.Content = $S.Checking; $ui.CheckUpdatesButton.IsEnabled = $false }
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        $client = New-Object Net.Http.HttpClient
+        $client.Timeout = [TimeSpan]::FromSeconds(15)
+        $client.DefaultRequestHeaders.UserAgent.ParseAdd('PokePort-launcher/' + $LocalVersion)
+        $client.DefaultRequestHeaders.Accept.ParseAdd('application/vnd.github+json')
+        $script:updateTask = $client.GetStringAsync($RepoApi)
+        $updateTimer.Start()
+    } catch {
+        Complete-UpdateCheck $null $_.Exception.Message
+    }
+}
+
+function Complete-UpdateCheck($Json, [string]$ErrorText) {
+    $updateTimer.Stop()
+    $script:updateTask = $null
+    if ($env:POKEPARK_LAUNCHER_SNAPSHOT) {
+        try { Complete-UpdateCheckCore $Json $ErrorText } finally { Save-Snapshot }
+        return
+    }
+    Complete-UpdateCheckCore $Json $ErrorText
+}
+
+function Complete-UpdateCheckCore($Json, [string]$ErrorText) {
+    $ui.CheckUpdatesButton.Content = $S.CheckUpdates
+    $ui.CheckUpdatesButton.IsEnabled = -not $script:process
+    if ($ErrorText) {
+        if ($script:updateManual) { [Windows.MessageBox]::Show($window, ($S.CheckFailed -f $ErrorText), $S.Title) | Out-Null }
+        return
+    }
+    try { $release = $Json | ConvertFrom-Json } catch { if ($script:updateManual) { [Windows.MessageBox]::Show($window, ($S.CheckFailed -f 'JSON'), $S.Title) | Out-Null }; return }
+    $asset = @($release.assets | Where-Object { $_.name -like 'PokePort-*.zip' }) | Select-Object -First 1
+    if (-not $asset) { if ($script:updateManual) { [Windows.MessageBox]::Show($window, ($S.UpToDate -f "v$LocalVersion"), $S.Title) | Out-Null }; return }
+    $sha = ''
+    if ($asset.PSObject.Properties['digest'] -and $asset.digest -like 'sha256:*') { $sha = $asset.digest.Substring(7) }
+    $script:latestRelease = [pscustomobject]@{
+        Tag = [string]$release.tag_name; Body = [string]$release.body; Url = [string]$asset.browser_download_url; Sha256 = $sha
+    }
+    $isNewer = (ConvertTo-VersionObject $release.tag_name) -gt (ConvertTo-VersionObject $LocalVersion)
+    if ($isNewer -and ($script:updateManual -or $script:skippedVersion -ne $release.tag_name)) {
+        $ui.UpdateText.Text = $S.NewVersion -f $release.tag_name
+        $ui.UpdateBanner.Visibility = 'Visible'
+    } elseif ($script:updateManual) {
+        [Windows.MessageBox]::Show($window, ($S.UpToDate -f "v$LocalVersion"), $S.Title) | Out-Null
+    }
+}
+
+$updateTimer.Add_Tick({
+    $task = $script:updateTask
+    if (-not $task -or -not $task.IsCompleted) { return }
+    if ($task.IsFaulted -or $task.IsCanceled) {
+        $message = $(if ($task.Exception) { $task.Exception.GetBaseException().Message } else { 'timeout' })
+        Complete-UpdateCheck $null $message
+    } else {
+        Complete-UpdateCheck $task.Result $null
+    }
+})
+
+function Show-ReleaseNotes {
+    $release = $script:latestRelease
+    if (-not $release) { return }
+    $notes = New-Object Windows.Window
+    $notes.Title = $S.NotesTitle -f $release.Tag
+    $notes.Width = 640; $notes.Height = 520; $notes.Owner = $window; $notes.WindowStartupLocation = 'CenterOwner'
+    $panel = New-Object Windows.Controls.DockPanel
+    $panel.Margin = '14'
+    $buttons = New-Object Windows.Controls.StackPanel
+    $buttons.Orientation = 'Horizontal'; $buttons.HorizontalAlignment = 'Right'; $buttons.Margin = '0,10,0,0'
+    [Windows.Controls.DockPanel]::SetDock($buttons, 'Bottom')
+    $updateNow = New-Object Windows.Controls.Button
+    $updateNow.Content = $S.UpdateNow; $updateNow.Padding = '16,6'; $updateNow.Margin = '0,0,8,0'
+    $close = New-Object Windows.Controls.Button
+    $close.Content = $S.Close; $close.Padding = '16,6'
+    [void]$buttons.Children.Add($updateNow); [void]$buttons.Children.Add($close)
+    $box = New-Object Windows.Controls.TextBox
+    $box.Text = ConvertFrom-ReleaseNotes $release.Body
+    $box.IsReadOnly = $true; $box.TextWrapping = 'Wrap'; $box.VerticalScrollBarVisibility = 'Auto'; $box.FontSize = 13; $box.Padding = '8'
+    [void]$panel.Children.Add($buttons); [void]$panel.Children.Add($box)
+    $notes.Content = $panel
+    $close.Add_Click({ $notes.Close() })
+    $updateNow.Add_Click({ $notes.Close(); Start-Update })
+    [void]$notes.ShowDialog()
+}
+
+function Start-Update {
+    $release = $script:latestRelease
+    if (-not $release) { return }
+    if ($script:process) { [Windows.MessageBox]::Show($window, $S.Busy, $S.Title) | Out-Null; return }
+    if (Test-GameRunning) { [Windows.MessageBox]::Show($window, $S.CloseGame, $S.Title) | Out-Null; return }
+    # Run a copy of the updater: the original is one of the files being replaced.
+    $runDir = Join-Path $LogDir 'updates\run'
+    [IO.Directory]::CreateDirectory($runDir) | Out-Null
+    $runner = Join-Path $runDir 'Update-PokePort.ps1'
+    Copy-Item -LiteralPath $UpdateScript -Destination $runner -Force
+    $ui.UpdateBanner.Visibility = 'Collapsed'
+    $ui.StatusText.Text = $S.Updating
+    Set-Progress 0
+    $arguments = '-Root ' + (Format-Arg $Root) + ' -Tag ' + (Format-Arg $release.Tag) + ' -AssetUrl ' + (Format-Arg $release.Url)
+    if ($release.Sha256) { $arguments += ' -Sha256 ' + $release.Sha256 }
+    [void](Start-Worker 'update' $runner $arguments)
+}
+
+$ui.CheckUpdatesButton.Add_Click({ Start-UpdateCheck $true })
+$ui.NotesButton.Add_Click({ Show-ReleaseNotes })
+$ui.UpdateButton.Add_Click({ Start-Update })
+$ui.LaterButton.Add_Click({ $ui.UpdateBanner.Visibility = 'Collapsed' })
+$ui.SkipButton.Add_Click({
+    if ($script:latestRelease) { $script:skippedVersion = $script:latestRelease.Tag; Save-LauncherSettings }
+    $ui.UpdateBanner.Visibility = 'Collapsed'
 })
 
 $ui.PlayButton.Add_Click({
@@ -442,23 +669,44 @@ $ui.LogButton.Add_Click({
     $ui.LogBox.Visibility = $(if ($ui.LogBox.Visibility -eq 'Visible') { 'Collapsed' } else { 'Visible' })
 })
 
+$ui.VersionText.Text = "v$LocalVersion"
+$ui.CheckUpdatesButton.Content = $S.CheckUpdates
+$ui.NotesButton.Content = $S.SeeNotes
+$ui.UpdateButton.Content = $S.UpdateNow
+$ui.LaterButton.Content = $S.Later
+$ui.SkipButton.Content = $S.Skip
+
+function Save-Snapshot {
+    # POKEPARK_LAUNCHER_SNAPSHOT=<file.png>: render the window to an image and close (for screenshots/tests).
+    $window.Dispatcher.Invoke([Action]{}, [Windows.Threading.DispatcherPriority]::ContextIdle)
+    $content = $window.Content
+    $bitmap = New-Object Windows.Media.Imaging.RenderTargetBitmap ([int]$content.ActualWidth), ([int]$content.ActualHeight), 96, 96, ([Windows.Media.PixelFormats]::Pbgra32)
+    $bitmap.Render($content)
+    $encoder = New-Object Windows.Media.Imaging.PngBitmapEncoder
+    $encoder.Frames.Add([Windows.Media.Imaging.BitmapFrame]::Create($bitmap))
+    $stream = [IO.File]::Create($env:POKEPARK_LAUNCHER_SNAPSHOT)
+    $encoder.Save($stream); $stream.Dispose()
+    $window.Close()
+}
+
 $window.Add_ContentRendered({
     Update-InstalledState
-    # POKEPARK_LAUNCHER_SNAPSHOT=<file.png>: render the window to an image and close (for screenshots/tests).
+    if (-not $env:POKEPARK_LAUNCHER_SNAPSHOT) {
+        if ($AfterUpdate -and $ui.DiscBox.Text.Trim()) {
+            # Rebuild with the new sources; the disc is already extracted and is not read again.
+            Start-Build
+            $ui.StatusText.Text = $S.Rebuilding
+        } else {
+            Start-UpdateCheck $false
+        }
+    }
     if ($env:POKEPARK_LAUNCHER_SNAPSHOT) {
-        $window.Dispatcher.Invoke([Action]{}, [Windows.Threading.DispatcherPriority]::ContextIdle)
-        $content = $window.Content
-        $bitmap = New-Object Windows.Media.Imaging.RenderTargetBitmap ([int]$content.ActualWidth), ([int]$content.ActualHeight), 96, 96, ([Windows.Media.PixelFormats]::Pbgra32)
-        $bitmap.Render($content)
-        $encoder = New-Object Windows.Media.Imaging.PngBitmapEncoder
-        $encoder.Frames.Add([Windows.Media.Imaging.BitmapFrame]::Create($bitmap))
-        $stream = [IO.File]::Create($env:POKEPARK_LAUNCHER_SNAPSHOT)
-        $encoder.Save($stream); $stream.Dispose()
-        $window.Close()
+        # With a test endpoint the snapshot waits for the update check (to show the banner).
+        if ($env:POKEPORT_UPDATE_API) { Start-UpdateCheck $false } else { Save-Snapshot }
     }
 })
 $window.Add_Closing({
-    if ($script:process -and -not $script:process.HasExited) {
+    if (-not $script:restarting -and $script:process -and -not $script:process.HasExited) {
         $answer = [Windows.MessageBox]::Show($window, (T 'La instalación sigue en marcha. Cerrar la detendrá. ¿Cerrar igualmente?' 'The installation is still running. Closing stops it. Close anyway?'), $S.Title, 'YesNo')
         if ($answer -ne 'Yes') { $_.Cancel = $true; return }
         try { Stop-Process -Id $script:process.Id -Force } catch {}
