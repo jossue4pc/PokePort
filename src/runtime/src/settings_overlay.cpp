@@ -1,3 +1,5 @@
+#include <cstdlib>
+#include <thread>
 #include "guest_abi/guest_region.h"
 #include "wiimote_virtual.h"
 #include "settings_overlay.h"
@@ -182,7 +184,9 @@ constexpr uint64_t kStrapTransitionCoverFrames = 60;
 std::atomic_bool g_bootShadersReady = false;
 bool g_bootShaderNotice = false;
 Clock::time_point g_bootShaderWaitStart{};
-constexpr uint32_t kBootShaderNoticeThreshold = 100;
+constexpr uint32_t kBootShaderNoticeThreshold = 10;
+// Largest boot queue seen, for "Preparing shaders: done / total".
+uint32_t g_bootShaderTotal = 0;
 constexpr auto kBootShaderWaitLimit = std::chrono::minutes(3);
 
 constexpr std::array<ResolutionItem, 8> kResolutions = {{
@@ -1476,8 +1480,10 @@ void DrawStartupScreen() {
         if (g_bootShaderNotice && !g_bootShadersReady.load(std::memory_order_relaxed)) {
             ImGui::SetWindowFontScale(0.9f);
             char line[96];
-            std::snprintf(line, sizeof(line), "Compiling shaders, please hold on: %u remaining",
-                          aurora_get_queued_pipeline_count());
+            const uint32_t remaining = aurora_get_queued_pipeline_count();
+            const uint32_t total = std::max(g_bootShaderTotal, remaining);
+            std::snprintf(line, sizeof(line), "Preparing shaders (first start only): %u / %u",
+                          total - remaining, total);
             const float lineX = std::max(0.0f, (viewport->Size.x - ImGui::CalcTextSize(line).x) * 0.5f);
             ImGui::SetCursorPos(ImVec2(lineX, startY + titleSize.y * 1.8f));
             ImGui::TextUnformatted(line);
@@ -1503,9 +1509,26 @@ void UpdateBootShaderState() {
         g_bootShaderWaitStart = now;
     }
     const uint32_t queued = aurora_get_queued_pipeline_count();
+    g_bootShaderTotal = std::max(g_bootShaderTotal, queued);
     g_bootShaderNotice |= queued > kBootShaderNoticeThreshold;
     if (queued == 0 || now - g_bootShaderWaitStart > kBootShaderWaitLimit) {
         g_bootShadersReady.store(true, std::memory_order_release);
+        // The bundled shader seed is compiled with every worker behind the startup screen; during gameplay
+        // keep few compile threads so the game thread is not starved on CPUs with few cores.
+        // MKW_SHADER_THREADS=<n> overrides.
+        const uint32_t workers = aurora_get_pipeline_worker_count();
+        if (workers > 0) {
+            const uint32_t hw = std::max(1u, std::thread::hardware_concurrency());
+            uint32_t limit = hw <= 8 ? 1u : (hw <= 16 ? 2u : 3u);
+            if (const char* env = std::getenv("MKW_SHADER_THREADS"); env != nullptr && *env != 0) {
+                limit = static_cast<uint32_t>(std::strtoul(env, nullptr, 10));
+            }
+            limit = std::clamp(limit, 1u, workers);
+            aurora_set_pipeline_worker_limit(limit);
+            RT_LOG(RT_TAG_RUNTIME) << "[shaders] boot preparation done (" << g_bootShaderTotal
+                                   << " queued at most); gameplay compile threads: " << limit << " of " << workers
+                                   << std::endl;
+        }
     }
 }
 

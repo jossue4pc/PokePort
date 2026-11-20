@@ -79,6 +79,10 @@ uint32_t aurora_get_frame_interpolation_fps();
 void aurora_set_skip_unready_pipelines(bool enabled);
 bool aurora_get_skip_unready_pipelines();
 uint32_t aurora_get_queued_pipeline_count();
+// Number of background shader-compilation threads, and how many of them may run (1..count). Lowering it during
+// gameplay keeps compilation from starving the game thread on CPUs with few cores.
+uint32_t aurora_get_pipeline_worker_count();
+void aurora_set_pipeline_worker_limit(uint32_t limit);
 
 // Controls whether display copies bypass the vertical copy filter.
 void aurora_set_disable_copy_filter(bool disabled);

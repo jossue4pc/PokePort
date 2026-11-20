@@ -81,6 +81,10 @@ $S.DiagStart     = T 'El juego se abrirá registrando el rendimiento. Juega norm
 $S.DiagTitle     = T 'Resumen del diagnóstico' 'Diagnostic summary'
 $S.OpenLogFolder = T 'Abrir carpeta del registro' 'Open log folder'
 
+$S.ShareShaders  = T 'Compartir caché de shaders' 'Share shader cache'
+$S.ShareDone     = T 'Listo: {0}{1}{1}Envíalo al autor del port (o adjúntalo en un issue de GitHub). Solo contiene la lista de efectos gráficos que ya se prepararon en tu PC; nada de tus partidas ni del juego. Con estas listas el port compila los shaders al arrancar y nadie tiene tirones la primera vez.' 'Done: {0}{1}{1}Send it to the port author (or attach it to a GitHub issue). It only lists the graphics effects already prepared on your PC; no saves or game data. These lists let the port compile shaders at start so nobody stutters the first time.'
+$S.ShareEmpty    = T 'Todavía no hay caché de shaders: juega un rato primero.' 'There is no shader cache yet: play for a while first.'
+
 $RepoApi = 'https://api.github.com/repos/jossue4pc/PokePort/releases/latest'
 # Test hook: point the update check at another endpoint (e.g. a local server with a fake release).
 if ($env:POKEPORT_UPDATE_API) { $RepoApi = $env:POKEPORT_UPDATE_API }
@@ -205,8 +209,11 @@ $UpdateScript = Join-Path $PSScriptRoot 'Update-PokePort.ps1'
                 <ComboBox x:Name="ApiBox" Width="150" HorizontalAlignment="Left"/>
               </DockPanel>
               <TextBlock x:Name="InGameText" Margin="0,10,0,0" FontSize="11.5" Foreground="#6B7A90" TextWrapping="Wrap"/>
-              <Button x:Name="DiagButton" Style="{StaticResource Pill}" Background="#E08A2E" FontSize="12" Padding="6,5" Margin="0,12,0,0"/>
-              <Button x:Name="LogButton" Style="{StaticResource Pill}" Background="#9AA7BD" FontSize="12" Padding="6,5" Margin="0,12,0,0"/>
+              <UniformGrid Columns="2" Margin="0,12,0,0">
+                <Button x:Name="DiagButton" Style="{StaticResource Pill}" Background="#E08A2E" FontSize="12" Padding="6,5" Margin="0,0,4,0"/>
+                <Button x:Name="LogButton" Style="{StaticResource Pill}" Background="#9AA7BD" FontSize="12" Padding="6,5" Margin="4,0,0,0"/>
+              </UniformGrid>
+              <Button x:Name="ShareButton" Style="{StaticResource Pill}" Background="#8E6CC8" FontSize="12" Padding="6,5" Margin="0,8,0,0"/>
             </StackPanel>
             <TextBox x:Name="LogBox" Visibility="Collapsed" Margin="0,8,0,0" FontFamily="Consolas" FontSize="10.5" IsReadOnly="True"
                      VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" Background="#F8FAFD"/>
@@ -224,7 +231,7 @@ foreach ($name in @('TitleText','SubtitleText','DiscHeader','DiscBox','BrowseBut
                     'ProgressFill','ProgressText','StatusText','PlayButton','InstallButton','FolderButton','ShortcutButton','OptionsHeader',
                     'Native60Box','WidescreenBox','FullscreenBox','ResolutionLabel','ResolutionBox','InGameText','LogButton','LogBox','LegalText',
                     'VersionText','CheckUpdatesButton','UpdateBanner','UpdateText','NotesButton','UpdateButton','LaterButton','SkipButton',
-                    'ApiLabel','ApiBox','DiagButton')) {
+                    'ApiLabel','ApiBox','DiagButton','ShareButton')) {
     $ui[$name] = $window.FindName($name)
 }
 $iconPath = Join-Path $PSScriptRoot 'assets\icon.ico'
@@ -362,6 +369,7 @@ function Update-InstalledState {
     $ui.FolderButton.IsEnabled = $installed
     $ui.ShortcutButton.IsEnabled = $installed
     $ui.DiagButton.IsEnabled = $installed
+    $ui.ShareButton.IsEnabled = $installed
     $ui.InstallButton.Content = $(if ($installed) { $S.Reinstall } else { $S.Install })
     if ($installed) {
         foreach ($id in $S.Steps.Keys) { Set-StepState $id 'done' }
@@ -747,6 +755,32 @@ $ui.DiagButton.Add_Click({
     $diagTimer.Start()
 })
 
+# --- Share the shader cache ---------------------------------------------------------------------------
+$ui.ShareButton.Add_Click({
+    if (Test-GameRunning) { [Windows.MessageBox]::Show($window, $S.CloseGame, $S.Title) | Out-Null; return }
+    $cacheDir = Join-Path $InstallDir 'UserData\Cache'
+    $db = Join-Path $cacheDir 'pipeline_cache.db'
+    if (-not (Test-Path -LiteralPath $db)) { [Windows.MessageBox]::Show($window, $S.ShareEmpty, $S.Title) | Out-Null; return }
+    $stage = Join-Path $LogDir ('share_' + [Guid]::NewGuid().ToString('N'))
+    [IO.Directory]::CreateDirectory($stage) | Out-Null
+    try {
+        # The -wal file holds the most recent entries until SQLite checkpoints it: ship all three.
+        Get-ChildItem -LiteralPath $cacheDir -Filter 'pipeline_cache.db*' | Copy-Item -Destination $stage -Force
+        $gpu = ''
+        $info = @("PokePort v$LocalVersion", "Date: $(Get-Date -Format o)", "CPU threads: $([Environment]::ProcessorCount)") -join "`r`n"
+        Set-Content -LiteralPath (Join-Path $stage 'info.txt') -Value $info -Encoding UTF8
+        $zip = Join-Path ([Environment]::GetFolderPath('Desktop')) ("PokePort-shaders-{0:yyyyMMdd_HHmm}.zip" -f (Get-Date))
+        if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
+        Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip
+        $answer = [Windows.MessageBox]::Show($window, ($S.ShareDone -f $zip, "`r`n") + "`r`n`r`n" + (T '¿Abrir la carpeta?' 'Open the folder?'), $S.ShareShaders, 'YesNo')
+        if ($answer -eq 'Yes') { Start-Process explorer.exe ('/select,"' + $zip + '"') }
+    } catch {
+        [Windows.MessageBox]::Show($window, "$($S.Failed): $($_.Exception.Message)", $S.Title) | Out-Null
+    } finally {
+        Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+    }
+})
+
 $ui.PlayButton.Add_Click({
     if (Test-Path $GameExe) { Start-Process -FilePath $GameExe -WorkingDirectory $InstallDir }
 })
@@ -767,6 +801,7 @@ $ui.LogButton.Add_Click({
 $ui.VersionText.Text = "v$LocalVersion"
 $ui.ApiLabel.Text = $S.GraphicsApi
 $ui.DiagButton.Content = $S.Diagnostic
+$ui.ShareButton.Content = $S.ShareShaders
 $ui.CheckUpdatesButton.Content = $S.CheckUpdates
 $ui.NotesButton.Content = $S.SeeNotes
 $ui.UpdateButton.Content = $S.UpdateNow

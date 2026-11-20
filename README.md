@@ -61,8 +61,12 @@ Si la hay, muestra un aviso con **Ver notas**, **Actualizar**, **Ahora no** u **
 - **Resolución:** si tu GPU va justa, usa *1x (Wii)* o *2x*.
 - **Modo diagnóstico** (botón naranja): abre el juego registrando el rendimiento. Al cerrarlo muestra un resumen
   (CPU/GPU, trabajo por fotograma y tirones por causa: shaders, GPU o juego) y el archivo para enviarlo en un *issue*.
-- El port incluye una **caché inicial de shaders de PokéPark**: los efectos se preparan en las primeras pantallas en vez
-  de la primera vez que aparecen en el juego.
+- El port incluye una **caché inicial de shaders de PokéPark**: la primera vez que arrancas verás «Preparing shaders
+  X / Y» unos segundos y después los efectos ya están listos. Durante la partida se compila con pocos hilos para no
+  quitarle CPU al juego.
+- **Compartir caché de shaders** (botón morado): crea en tu escritorio un ZIP con la lista de efectos que tu PC ya
+  preparó. Si lo envías (o lo adjuntas en un *issue*), se añade a la caché del port y nadie tendrá tirones en esas
+  zonas. Solo contiene configuraciones gráficas, nada de tus partidas ni del juego.
 
 ## Problemas conocidos
 - En el **primer arranque** puede aparecer «Game 1 data is corrupted». Elige **Yes**: se crea la partida y no vuelve a salir.
@@ -111,8 +115,9 @@ what changed — the previous `PokePark.exe` keeps working until the new one bui
 
 **Performance:** choose the graphics API (Auto / Direct3D 12 / Vulkan; try Vulkan on GTX 10-series cards) and a lower
 resolution on weak GPUs. **Diagnostic mode** (orange button) records performance while you play and shows a summary
-(CPU/GPU, work per frame, stutters by cause) plus the file to attach to an issue. A PokéPark shader seed is bundled so
-effects compile on the first screens instead of the first time they appear.
+(CPU/GPU, work per frame, stutters by cause) plus the file to attach to an issue. A PokéPark shader seed is bundled and compiled
+on first start ("Preparing shaders X / Y"); during gameplay few compile threads are used. **Share shader cache** (purple
+button) zips the effects your PC prepared so they can be added to the seed for everyone.
 
 **Known issues:** on the very first boot the game may say "Game 1 data is corrupted" — answer **Yes**, it creates the
 save and won't ask again. "Choose Your Picture" thumbnails are empty on a new game.

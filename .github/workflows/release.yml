@@ -1,0 +1,52 @@
+# Publishes a GitHub release whenever a version tag (vX.Y.Z) is pushed.
+# The ZIP is the tagged source tree (no game files exist in this repository); the release text comes from
+# docs/release-notes/<tag>.md. GitHub computes the asset's SHA-256 digest, which the launcher's updater verifies.
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check that VERSION matches the tag
+        run: |
+          version="$(tr -d '\r\n' < VERSION)"
+          if [ "v${version}" != "${GITHUB_REF_NAME}" ]; then
+            echo "VERSION (${version}) does not match the tag (${GITHUB_REF_NAME})." >&2
+            exit 1
+          fi
+
+      - name: Build the release ZIP
+        run: |
+          git archive --format=zip --prefix="PokePort-${GITHUB_REF_NAME}/" \
+            -o "PokePort-${GITHUB_REF_NAME}.zip" "${GITHUB_REF_NAME}"
+          ls -l "PokePort-${GITHUB_REF_NAME}.zip"
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="docs/release-notes/${GITHUB_REF_NAME}.md"
+          if [ ! -f "${notes}" ]; then
+            printf 'PokePort %s\n' "${GITHUB_REF_NAME}" > /tmp/notes.md
+            notes=/tmp/notes.md
+          fi
+          if gh release view "${GITHUB_REF_NAME}" > /dev/null 2>&1; then
+            # A release made by hand for this tag: refresh its text and asset.
+            gh release edit "${GITHUB_REF_NAME}" --title "PokePort ${GITHUB_REF_NAME}" --notes-file "${notes}" --latest
+            gh release upload "${GITHUB_REF_NAME}" "PokePort-${GITHUB_REF_NAME}.zip" --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" "PokePort-${GITHUB_REF_NAME}.zip" \
+              --title "PokePort ${GITHUB_REF_NAME}" --notes-file "${notes}" --latest
+          fi

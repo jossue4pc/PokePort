@@ -10,12 +10,16 @@ textures or models.
 Usage (maintainers):
   python tools/build_pipeline_seed.py OUT.db CACHE.db [CACHE.db ...] [--exclude MKW_SEED.db]
 
-Inputs are pipeline_cache.db files from PokePark\\UserData\\Cache after playing. Rows from --exclude are
+Inputs are pipeline_cache.db files from PokePark\\UserData\\Cache after playing, or the PokePort-shaders-*.zip
+files made by the launcher's "Share shader cache" button (they include the -wal file with the newest entries). Rows from --exclude are
 dropped (except aurora's generic type-0 clear pipelines, which every game uses).
 """
 import argparse
 import os
+import shutil
 import sqlite3
+import tempfile
+import zipfile
 
 SCHEMA = 1
 SEED_ID = 'pokepark-r8ae01'
@@ -36,8 +40,22 @@ def main():
         db.close()
 
     rows = {}
+    temp_dirs = []
+    paths = []
     for path in args.caches:
-        db = sqlite3.connect('file:%s?mode=ro' % path, uri=True)
+        if path.lower().endswith('.zip'):
+            # Extract next to each other so SQLite replays the -wal file on open.
+            work = tempfile.mkdtemp(prefix='pokeport_seed_')
+            temp_dirs.append(work)
+            with zipfile.ZipFile(path) as archive:
+                for name in archive.namelist():
+                    if os.path.basename(name).startswith('pipeline_cache.db'):
+                        with archive.open(name) as src, open(os.path.join(work, os.path.basename(name)), 'wb') as dst:
+                            shutil.copyfileobj(src, dst)
+            path = os.path.join(work, 'pipeline_cache.db')
+        paths.append(path)
+    for path in paths:
+        db = sqlite3.connect(path)
         for row in db.execute('SELECT type, hash, config_version, config_size, config, first_frame_used FROM pipeline_cache'):
             key = (row[0], row[1])
             if key in excluded:
@@ -46,6 +64,8 @@ def main():
             if key not in rows or row[5] < rows[key][5]:
                 rows[key] = row
         db.close()
+    for work in temp_dirs:
+        shutil.rmtree(work, ignore_errors=True)
 
     if os.path.exists(args.out):
         os.remove(args.out)

@@ -15,6 +15,8 @@ struct PipelineConfig;
 } // namespace aurora::rmlui
 
 namespace aurora::gfx {
+void set_pipeline_worker_limit(uint32_t limit) noexcept;
+uint32_t pipeline_worker_count() noexcept;
 
 enum class ShaderType : uint8_t {
   Clear = 0,

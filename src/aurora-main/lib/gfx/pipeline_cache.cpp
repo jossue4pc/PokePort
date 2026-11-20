@@ -90,6 +90,9 @@ constexpr size_t BuildPipelinesPerFrame = 5;
 constexpr size_t BuildPipelinesPerFrame = 1;
 #endif
 static std::vector<std::thread> g_pipelineThreads;
+// Workers with an index at or above this limit sleep. The host lowers it during gameplay so shader
+// compilation cannot starve the game thread on CPUs with few cores (aurora_set_pipeline_worker_limit).
+static std::atomic_uint32_t g_pipelineWorkerLimit{UINT32_MAX};
 static std::atomic_bool g_pipelineThreadEnd = false;
 static std::condition_variable g_pipelineQueueCv;
 static std::condition_variable g_pipelineReadyCv;
@@ -1003,7 +1006,7 @@ static void pipeline_cache_writer() {
   }
 }
 
-static void pipeline_worker() {
+static void pipeline_worker(uint32_t workerIndex) {
 #ifdef TRACY_ENABLE
   tracy::SetThreadName("Pipeline compilation thread");
 #endif
@@ -1014,8 +1017,12 @@ static void pipeline_worker() {
       std::unique_lock lock{g_pipelineMutex};
       if (g_hasPipelineThread) {
         // Another worker may have consumed the remaining jobs since our last iteration.
-        g_pipelineQueueCv.wait(lock, [] {
-          return !g_pipelineQueue.empty() || !g_backgroundPipelineQueue.empty() || g_pipelineThreadEnd;
+        g_pipelineQueueCv.wait(lock, [workerIndex] {
+          if (g_pipelineThreadEnd) {
+            return true;
+          }
+          const bool allowed = workerIndex < g_pipelineWorkerLimit.load(std::memory_order_acquire);
+          return allowed && (!g_pipelineQueue.empty() || !g_backgroundPipelineQueue.empty());
         });
       } else if (g_pipelineQueue.empty() && g_backgroundPipelineQueue.empty()) {
         return;
@@ -1194,7 +1201,7 @@ void initialize_pipeline_cache() {
     const auto workerCount = std::clamp(std::thread::hardware_concurrency() / 2, 1u, 4u);
 
     for (unsigned int i = 0; i < workerCount; ++i) {
-      g_pipelineThreads.emplace_back(pipeline_worker);
+      g_pipelineThreads.emplace_back(pipeline_worker, static_cast<uint32_t>(i));
     }
   }
 
@@ -1255,7 +1262,7 @@ void begin_pipeline_frame() {
 
 void end_pipeline_frame() {
   if (!g_hasPipelineThread) {
-    pipeline_worker();
+    pipeline_worker(0);
   }
 }
 
@@ -1301,4 +1308,17 @@ bool get_pipeline(PipelineRef ref, CompiledPipeline& pipeline) {
   return true;
 }
 
+} // namespace aurora::gfx
+
+namespace aurora::gfx {
+void set_pipeline_worker_limit(uint32_t limit) noexcept {
+  g_pipelineWorkerLimit.store(limit == 0 ? 1u : limit, std::memory_order_release);
+  {
+    // Lock so no worker can miss the wake-up between testing its predicate and sleeping.
+    std::lock_guard lock{g_pipelineMutex};
+  }
+  g_pipelineQueueCv.notify_all();
+}
+
+uint32_t pipeline_worker_count() noexcept { return static_cast<uint32_t>(g_pipelineThreads.size()); }
 } // namespace aurora::gfx

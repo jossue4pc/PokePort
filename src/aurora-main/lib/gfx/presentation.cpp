@@ -1,3 +1,4 @@
+#include "pipeline_cache.hpp"
 #include "presentation.hpp"
 
 #include "render_worker.hpp"
@@ -273,6 +274,10 @@ void aurora_set_skip_unready_pipelines(bool enabled) {
 bool aurora_get_skip_unready_pipelines() { return g_skipUnreadyPipelines.load(std::memory_order_acquire); }
 
 uint32_t aurora_get_queued_pipeline_count() { return aurora_get_stats()->queuedPipelines; }
+
+uint32_t aurora_get_pipeline_worker_count() { return aurora::gfx::pipeline_worker_count(); }
+
+void aurora_set_pipeline_worker_limit(uint32_t limit) { aurora::gfx::set_pipeline_worker_limit(limit); }
 
 void aurora_set_disable_copy_filter(bool disabled) { aurora::g_config.disableCopyFilter = disabled; }
 
