@@ -189,12 +189,24 @@ function Invoke-DepsStep {
 # --- Disc --------------------------------------------------------------------------------------------
 function Get-FileSha256([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
 
+# Removes game\. When it is a junction to the player's own extracted folder, only the link is removed:
+# a recursive delete would follow it and erase the player's files.
+function Remove-GameDir {
+    if (-not (Test-Path -LiteralPath $GameDir)) { return }
+    $item = Get-Item -LiteralPath $GameDir -Force
+    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+        [IO.Directory]::Delete($GameDir, $false)
+    } else {
+        Remove-Item -LiteralPath $GameDir -Recurse -Force
+    }
+}
+
 function Invoke-DiscStep {
     Step 'disc' 'Reading your PokePark disc image'
     if ($ExtractedDir) {
         $source = [IO.Path]::GetFullPath($ExtractedDir)
         if (-not (Test-Path (Join-Path $source 'sys\main.dol'))) { throw "No sys\main.dol in $source." }
-        if (Test-Path -LiteralPath $GameDir) { cmd /c rmdir "$GameDir" 2>$null; Remove-Item -LiteralPath $GameDir -Recurse -Force -ErrorAction SilentlyContinue }
+        Remove-GameDir
         New-Item -ItemType Junction -Path $GameDir -Target $source | Out-Null
         Info "Using the extracted folder $source"
     } else {
@@ -213,7 +225,7 @@ function Invoke-DiscStep {
             throw "This disc is $($match.Groups[1].Value); the port needs PokePark Wii: Pikachu's Adventure (USA, $GameId)."
         }
         Info "Disc: PokePark Wii (USA) $GameId"
-        if (Test-Path -LiteralPath $GameDir) { cmd /c rmdir "$GameDir" 2>$null; Remove-Item -LiteralPath $GameDir -Recurse -Force -ErrorAction SilentlyContinue }
+        Remove-GameDir
         Info 'Extracting the disc (a few minutes)...'
         Invoke-Tool $nodtool @('extract', $image, $GameDir, '-q') 'nodtool extract'
     }
