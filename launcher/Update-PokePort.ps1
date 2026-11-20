@@ -32,7 +32,7 @@ $BuildRoot = Join-Path $Root '.build'
 $UpdatesDir = Join-Path $BuildRoot 'updates'
 $StateDir = Join-Path $BuildRoot 'state'
 # What a release owns. Everything else in the folder belongs to the player.
-$ManagedDirs = @('launcher', 'src', 'fonts', 'docs')
+$ManagedDirs = @('launcher', 'src', 'fonts', 'docs', 'tools')
 $ManagedFiles = @('README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'PokeParkLauncher.bat', 'VERSION', '.gitignore')
 # Inside src\: kept across updates (the translator refreshes it; keeping it avoids a full rebuild).
 $PreservedInSrc = @('generated')

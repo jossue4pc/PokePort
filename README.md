@@ -56,6 +56,14 @@ Si la hay, muestra un aviso con **Ver notas**, **Actualizar**, **Ahora no** u **
 - **no toca** tus partidas ni ajustes (`PokePark\UserData`), tu disco extraído ni las herramientas descargadas;
 - recompila solo lo que cambió; el `PokePark.exe` anterior sigue funcionando hasta que el nuevo compila bien.
 
+## Rendimiento y diagnóstico
+- **API gráfica** (lanzador → Opciones): *Auto*, *Direct3D 12* o *Vulkan*. En tarjetas NVIDIA GTX 10xx (Pascal) prueba Vulkan.
+- **Resolución:** si tu GPU va justa, usa *1x (Wii)* o *2x*.
+- **Modo diagnóstico** (botón naranja): abre el juego registrando el rendimiento. Al cerrarlo muestra un resumen
+  (CPU/GPU, trabajo por fotograma y tirones por causa: shaders, GPU o juego) y el archivo para enviarlo en un *issue*.
+- El port incluye una **caché inicial de shaders de PokéPark**: los efectos se preparan en las primeras pantallas en vez
+  de la primera vez que aparecen en el juego.
+
 ## Problemas conocidos
 - En el **primer arranque** puede aparecer «Game 1 data is corrupted». Elige **Yes**: se crea la partida y no vuelve a salir.
 - Las miniaturas de «Choose Your Picture» se ven vacías en una partida nueva.
@@ -100,6 +108,11 @@ and `files\`), press **Install** (15–40 minutes the first time) and then **▶
 notes / Update / Not now / Skip this version**. Updating verifies the download (SHA-256), backs up the current version
 and restores it if anything fails, never touches your saves, settings, extracted disc or toolchain, and rebuilds only
 what changed — the previous `PokePark.exe` keeps working until the new one builds.
+
+**Performance:** choose the graphics API (Auto / Direct3D 12 / Vulkan; try Vulkan on GTX 10-series cards) and a lower
+resolution on weak GPUs. **Diagnostic mode** (orange button) records performance while you play and shows a summary
+(CPU/GPU, work per frame, stutters by cause) plus the file to attach to an issue. A PokéPark shader seed is bundled so
+effects compile on the first screens instead of the first time they appear.
 
 **Known issues:** on the very first boot the game may say "Game 1 data is corrupted" — answer **Yes**, it creates the
 save and won't ask again. "Choose Your Picture" thumbnails are empty on a new game.

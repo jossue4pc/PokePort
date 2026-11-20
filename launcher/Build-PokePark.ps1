@@ -375,6 +375,17 @@ function Invoke-InstallStep {
     $userData = Join-Path $InstallDir 'UserData'
     [IO.Directory]::CreateDirectory($userData) | Out-Null
     Write-DefaultConfig (Join-Path $userData 'Config.toml')
+    # Versions up to 0.1.2 merged Mario Kart Wii's 1101-entry shader seed into the player's pipeline cache, which
+    # then compiled in the background at every start. Drop that cache once (only shader descriptions: PokePark's own
+    # seed refills it); saves and settings are elsewhere and untouched.
+    $cacheDir = Join-Path $userData 'Cache'
+    $seedMarker = Join-Path $cacheDir 'pokeport-seed.txt'
+    if ((Test-Path -LiteralPath $cacheDir) -and -not (Test-Path -LiteralPath $seedMarker)) {
+        Get-ChildItem -LiteralPath $cacheDir -Filter 'pipeline_cache.db*' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+        Info 'Shader cache reset (old Mario Kart Wii seed removed).'
+    }
+    [IO.Directory]::CreateDirectory($cacheDir) | Out-Null
+    Write-TextFile $seedMarker 'pokepark-r8ae01 seed v1'
     Progress 100
     Done 'install'
 }

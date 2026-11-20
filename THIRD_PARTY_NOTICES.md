@@ -12,6 +12,7 @@ Dolphin data files, pugixml, Crypto++, toml11, YamlDotNet, libco, and the librar
 | Dolphin free replacement IPL fonts (`font_western.bin`, `font_japanese.bin`) | `fonts/` | GPL-2.0-or-later (Dolphin) |
 | PokéPark Wii decompilation symbol map (function addresses and names) | `src/projects/pokepark/MAP*.txt` | from the SephDB PokéPark decompilation project |
 | Launcher, build pipeline, icon (original work) | `launcher/`, `PokeParkLauncher.bat` | GPL-3.0 |
+| PokéPark shader seed: GX pipeline configurations (TEV/blend/vertex-format state) recorded by aurora while playing; replaces upstream's Mario Kart Wii seed. No textures, models or code | `src/runtime/assets/pipeline/initial_pipeline_cache.db`, built with `tools/build_pipeline_seed.py` | GPL-3.0 |
 
 ## Downloaded on the player's machine during installation (not redistributed)
 | Tool | Source |

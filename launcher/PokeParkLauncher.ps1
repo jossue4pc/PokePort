@@ -75,6 +75,12 @@ $S.Rebuilding    = T 'Aplicando la actualización: recompilando solo lo que camb
 $S.NotesTitle    = T 'Novedades de {0}' 'What is new in {0}'
 $S.Close         = T 'Cerrar' 'Close'
 
+$S.GraphicsApi   = T 'API gráfica' 'Graphics API'
+$S.Diagnostic    = T 'Modo diagnóstico' 'Diagnostic mode'
+$S.DiagStart     = T 'El juego se abrirá registrando el rendimiento. Juega normalmente unos minutos (pasa por donde notes tirones) y ciérralo: se mostrará un resumen y el archivo para enviarlo.' 'The game will open while recording performance. Play normally for a few minutes (go where you notice stutters) and close it: a summary and the file to share will be shown.'
+$S.DiagTitle     = T 'Resumen del diagnóstico' 'Diagnostic summary'
+$S.OpenLogFolder = T 'Abrir carpeta del registro' 'Open log folder'
+
 $RepoApi = 'https://api.github.com/repos/jossue4pc/PokePort/releases/latest'
 # Test hook: point the update check at another endpoint (e.g. a local server with a fake release).
 if ($env:POKEPORT_UPDATE_API) { $RepoApi = $env:POKEPORT_UPDATE_API }
@@ -194,7 +200,12 @@ $UpdateScript = Join-Path $PSScriptRoot 'Update-PokePort.ps1'
                 <TextBlock x:Name="ResolutionLabel" VerticalAlignment="Center" Margin="0,0,8,0"/>
                 <ComboBox x:Name="ResolutionBox" Width="150" HorizontalAlignment="Left"/>
               </DockPanel>
+              <DockPanel Margin="0,6,0,0">
+                <TextBlock x:Name="ApiLabel" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <ComboBox x:Name="ApiBox" Width="150" HorizontalAlignment="Left"/>
+              </DockPanel>
               <TextBlock x:Name="InGameText" Margin="0,10,0,0" FontSize="11.5" Foreground="#6B7A90" TextWrapping="Wrap"/>
+              <Button x:Name="DiagButton" Style="{StaticResource Pill}" Background="#E08A2E" FontSize="12" Padding="6,5" Margin="0,12,0,0"/>
               <Button x:Name="LogButton" Style="{StaticResource Pill}" Background="#9AA7BD" FontSize="12" Padding="6,5" Margin="0,12,0,0"/>
             </StackPanel>
             <TextBox x:Name="LogBox" Visibility="Collapsed" Margin="0,8,0,0" FontFamily="Consolas" FontSize="10.5" IsReadOnly="True"
@@ -212,7 +223,8 @@ $ui = @{}
 foreach ($name in @('TitleText','SubtitleText','DiscHeader','DiscBox','BrowseButton','BrowseDirButton','DiscHint','StepsHeader','StepsPanel',
                     'ProgressFill','ProgressText','StatusText','PlayButton','InstallButton','FolderButton','ShortcutButton','OptionsHeader',
                     'Native60Box','WidescreenBox','FullscreenBox','ResolutionLabel','ResolutionBox','InGameText','LogButton','LogBox','LegalText',
-                    'VersionText','CheckUpdatesButton','UpdateBanner','UpdateText','NotesButton','UpdateButton','LaterButton','SkipButton')) {
+                    'VersionText','CheckUpdatesButton','UpdateBanner','UpdateText','NotesButton','UpdateButton','LaterButton','SkipButton',
+                    'ApiLabel','ApiBox','DiagButton')) {
     $ui[$name] = $window.FindName($name)
 }
 $iconPath = Join-Path $PSScriptRoot 'assets\icon.ico'
@@ -307,6 +319,8 @@ function Get-ConfigValue([string]$Key) {
 }
 
 $resolutions = [ordered]@{ 'Auto' = '0'; '1x (Wii)' = '1'; '2x' = '2'; '3x' = '3'; '4x' = '4' }
+$apis = [ordered]@{ 'Auto' = 'auto'; 'Direct3D 12' = 'd3d12'; 'Vulkan' = 'vulkan' }
+foreach ($k in $apis.Keys) { [void]$ui.ApiBox.Items.Add($k) }
 foreach ($k in $resolutions.Keys) { [void]$ui.ResolutionBox.Items.Add($k) }
 $loadingOptions = $false
 function Update-OptionsFromConfig {
@@ -320,11 +334,21 @@ function Update-OptionsFromConfig {
     $selected = 'Auto'
     foreach ($k in $resolutions.Keys) { if ($res -and [double]$res -eq [double]$resolutions[$k]) { $selected = $k } }
     $ui.ResolutionBox.SelectedItem = $selected
+    $api = Get-ConfigValue 'graphics_api'
+    $apiSelected = 'Auto'
+    foreach ($k in $apis.Keys) { if ($api -eq $apis[$k]) { $apiSelected = $k } }
+    $ui.ApiBox.SelectedItem = $apiSelected
+    $ui.ApiBox.IsEnabled = $installed
     $script:loadingOptions = $false
 }
 $ui.Native60Box.Add_Click({ if (-not $loadingOptions) { Set-ConfigValue 'video' 'native_60fps' ($(if ($ui.Native60Box.IsChecked) { 'true' } else { 'false' })) } })
 $ui.WidescreenBox.Add_Click({ if (-not $loadingOptions) { Set-ConfigValue 'video' 'force_aspect' ($(if ($ui.WidescreenBox.IsChecked) { 'true' } else { 'false' })) } })
 $ui.FullscreenBox.Add_Click({ if (-not $loadingOptions) { Set-ConfigValue 'video' 'display_mode' ($(if ($ui.FullscreenBox.IsChecked) { '"borderless"' } else { '"windowed"' })) } })
+$ui.ApiBox.Add_SelectionChanged({
+    if (-not $loadingOptions -and $ui.ApiBox.SelectedItem) {
+        Set-ConfigValue 'video' 'graphics_api' ('"' + $apis[[string]$ui.ApiBox.SelectedItem] + '"')
+    }
+})
 $ui.ResolutionBox.Add_SelectionChanged({
     if (-not $loadingOptions -and $ui.ResolutionBox.SelectedItem) {
         Set-ConfigValue 'video' 'resolution_multiplier' $resolutions[[string]$ui.ResolutionBox.SelectedItem]
@@ -337,6 +361,7 @@ function Update-InstalledState {
     $ui.PlayButton.IsEnabled = $installed
     $ui.FolderButton.IsEnabled = $installed
     $ui.ShortcutButton.IsEnabled = $installed
+    $ui.DiagButton.IsEnabled = $installed
     $ui.InstallButton.Content = $(if ($installed) { $S.Reinstall } else { $S.Install })
     if ($installed) {
         foreach ($id in $S.Steps.Keys) { Set-StepState $id 'done' }
@@ -652,6 +677,76 @@ $ui.SkipButton.Add_Click({
     $ui.UpdateBanner.Visibility = 'Collapsed'
 })
 
+# --- Diagnostic mode ----------------------------------------------------------------------------------
+$script:diagProcess = $null
+$script:diagLog = $null
+$diagTimer = New-Object Windows.Threading.DispatcherTimer
+$diagTimer.Interval = [TimeSpan]::FromSeconds(1)
+
+function Get-DiagnosticSummary([string]$LogPath) {
+    $lines = Get-Content -LiteralPath $LogPath -ErrorAction SilentlyContinue
+    $cpu = ($lines | Where-Object { $_ -match 'CPU model: (.+)$' } | Select-Object -First 1) -replace '.*CPU model: ', ''
+    $gpus = @($lines | Where-Object { $_ -match 'Device: (.+)$' } | ForEach-Object { ($_ -replace '.*Device: ', '').Trim() }) | Select-Object -Unique
+    $api = ($lines | Where-Object { $_ -match 'graphics backend: (.+)$' } | Select-Object -First 1) -replace '.*graphics backend: ', ''
+    $frames = 0
+    foreach ($l in $lines) { if ($l -match 'presented frames=(\d+)') { $frames = [int]$Matches[1] } }
+    $busy = @(); foreach ($l in $lines) { if ($l -match 'busy ms/frame over \d+ frames: avg ([\d.]+)') { $busy += [double]$Matches[1] } }
+    $hitches = @(); $shader = 0; $render = 0; $game = 0; $worst = 0.0
+    foreach ($l in $lines) {
+        if ($l -notmatch '\[hitch\] ([\d.]+) ms: guest ([\d.]+).*endFrame ([\d.]+) \| pipelines \+(\d+)') { continue }
+        $ms = [double]$Matches[1]; $end = [double]$Matches[3]; $pipes = [int]$Matches[4]
+        if ($ms -lt 25) { continue }   # a 50 fps scene is slow, not a stutter
+        $hitches += $ms
+        if ($ms -gt $worst) { $worst = $ms }
+        if ($pipes -gt 0) { $shader++ } elseif ($end -gt 8) { $render++ } else { $game++ }
+    }
+    $avgBusy = $(if ($busy.Count) { [Math]::Round(($busy | Measure-Object -Average).Average, 1) } else { 'n/d' })
+    $text = @()
+    $text += (T 'Procesador: ' 'CPU: ') + $cpu
+    $text += (T 'Tarjeta gráfica: ' 'GPU: ') + ($gpus -join ', ') + "  ($api)"
+    $text += (T 'Fotogramas mostrados: ' 'Frames presented: ') + $frames
+    $text += (T 'Trabajo de CPU por fotograma (media): ' 'CPU work per frame (average): ') + "$avgBusy ms " + (T '(16,7 ms = límite para 60 fps)' '(16.7 ms = budget for 60 fps)')
+    $text += (T 'Tirones de más de 25 ms: ' 'Stutters over 25 ms: ') + $hitches.Count + (T '  (peor: ' '  (worst: ') + [Math]::Round($worst, 1) + ' ms)'
+    $text += (T '  - por compilación de shaders: ' '  - shader compilation: ') + $shader
+    $text += (T '  - por la GPU / dibujado: ' '  - GPU / rendering: ') + $render
+    $text += (T '  - por el juego (CPU, cargas): ' '  - game work (CPU, loading): ') + $game
+    $text += ''
+    $text += (T 'Envía este archivo para analizarlo: ' 'Send this file for analysis: ') + $LogPath
+    return ($text -join "`r`n")
+}
+
+$diagTimer.Add_Tick({
+    if (-not $script:diagProcess -or -not $script:diagProcess.HasExited) { return }
+    $diagTimer.Stop()
+    $script:diagProcess = $null
+    Set-Busy $false
+    $ui.PlayButton.IsEnabled = (Test-Path $GameExe)
+    $summary = Get-DiagnosticSummary $script:diagLog
+    Set-Content -LiteralPath ($script:diagLog -replace '\.log$', '_resumen.txt') -Value $summary -Encoding UTF8
+    $answer = [Windows.MessageBox]::Show($window, $summary + "`r`n`r`n" + (T '¿Abrir la carpeta del registro?' 'Open the log folder?'), $S.DiagTitle, 'YesNo')
+    if ($answer -eq 'Yes') { Start-Process explorer.exe ('/select,"' + $script:diagLog + '"') }
+})
+
+$ui.DiagButton.Add_Click({
+    if (-not (Test-Path $GameExe)) { return }
+    if ($script:process -or $script:diagProcess) { [Windows.MessageBox]::Show($window, $S.Busy, $S.Title) | Out-Null; return }
+    if (Test-GameRunning) { [Windows.MessageBox]::Show($window, $S.CloseGame, $S.Title) | Out-Null; return }
+    if ([Windows.MessageBox]::Show($window, $S.DiagStart, $S.Diagnostic, 'OKCancel') -ne 'OK') { return }
+    $diagDir = Join-Path $LogDir 'diagnostics'
+    [IO.Directory]::CreateDirectory($diagDir) | Out-Null
+    $script:diagLog = Join-Path $diagDir ("diagnostico_{0:yyyyMMdd_HHmmss}.log" -f (Get-Date))
+    $startInfo = New-Object Diagnostics.ProcessStartInfo 'cmd.exe'
+    $startInfo.Arguments = '/d /c ""' + $GameExe + '" > "' + $script:diagLog + '" 2>&1"'
+    $startInfo.WorkingDirectory = $InstallDir
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.EnvironmentVariables['MKW_HITCHLOG'] = '1'
+    $startInfo.EnvironmentVariables['MKW_PERF_STATS'] = '1'
+    $script:diagProcess = [Diagnostics.Process]::Start($startInfo)
+    Set-Busy $true
+    $diagTimer.Start()
+})
+
 $ui.PlayButton.Add_Click({
     if (Test-Path $GameExe) { Start-Process -FilePath $GameExe -WorkingDirectory $InstallDir }
 })
@@ -670,6 +765,8 @@ $ui.LogButton.Add_Click({
 })
 
 $ui.VersionText.Text = "v$LocalVersion"
+$ui.ApiLabel.Text = $S.GraphicsApi
+$ui.DiagButton.Content = $S.Diagnostic
 $ui.CheckUpdatesButton.Content = $S.CheckUpdates
 $ui.NotesButton.Content = $S.SeeNotes
 $ui.UpdateButton.Content = $S.UpdateNow
