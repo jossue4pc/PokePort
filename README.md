@@ -1,4 +1,4 @@
-# PokéPark Wii — PC Port (unofficial)
+# PokePort — PokéPark Wii para PC / PokéPark Wii PC port (unofficial)
 
 **Español** · [English](#english)
 
@@ -22,8 +22,8 @@ Port nativo para PC de *PokéPark Wii: Pikachu's Adventure* (USA), hecho por fan
 - Tu imagen de disco de *PokéPark Wii: Pikachu's Adventure* (USA, revisión 0).
 
 ## Cómo jugar
-1. Descarga este repositorio (botón **Code → Download ZIP**) y descomprímelo en una carpeta **sin espacios raros ni
-   tildes** (por ejemplo `C:\Juegos\PokeParkRecomp`).
+1. Descarga la última versión desde **[Releases](../../releases)** (archivo `PokePort-vX.Y.Z.zip`) o con **Code → Download ZIP** y descomprímelo en una carpeta **sin espacios raros ni
+   tildes** (por ejemplo `C:\Juegos\PokePort`).
 2. Abre **`PokeParkLauncher.bat`**.
 3. Pulsa **Elegir disco…** y selecciona tu ISO/RVZ (o **Carpeta…** si lo extrajiste con Dolphin: debe contener
    `sys\main.dol` y `files\`).
@@ -84,8 +84,8 @@ Wii Remotes over Bluetooth should work, untested) · audio, videos, saving, HOME
 **Requirements:** Windows 10/11 x64, a DirectX 12/Vulkan GPU, ~10 GB free, internet during the first install, and your
 PokéPark Wii (USA, Rev 0) disc image.
 
-**How to play:** download this repository (Code → Download ZIP), extract it to a simple path (e.g.
-`C:\Games\PokeParkRecomp`), run `PokeParkLauncher.bat`, pick your disc image (or an extracted folder with `sys\main.dol`
+**How to play:** download the latest `PokePort-vX.Y.Z.zip` from **[Releases](../../releases)** (or Code → Download ZIP), extract it to a simple path (e.g.
+`C:\Games\PokePort`), run `PokeParkLauncher.bat`, pick your disc image (or an extracted folder with `sys\main.dol`
 and `files\`), press **Install** (15–40 minutes the first time) and then **▶ PLAY**.
 
 **Known issues:** on the very first boot the game may say "Game 1 data is corrupted" — answer **Yes**, it creates the
