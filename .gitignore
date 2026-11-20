@@ -1,0 +1,23 @@
+# Everything produced from the player's own disc stays local and must never be committed.
+/game/
+/PokePark/
+/.build/
+/build_pokepark/
+/src/generated/
+/src/runtime/native-index.json
+*.iso
+*.rvz
+*.wbfs
+*.wia
+*.ciso
+*.gcz
+*.nkit.iso
+*.dol
+*.rel
+*.thp
+
+# Build output
+bin/
+obj/
+*.log
+.vs/
