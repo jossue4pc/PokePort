@@ -87,6 +87,13 @@ $S.ShareEmpty    = T 'Todavía no hay caché de shaders: juega un rato primero.'
 
 $S.NeedsRebuild  = T 'Hay archivos de la versión {0}: pulsa Reinstalar para aplicarla (unos minutos; tu partida se conserva). Mientras tanto puedes jugar con la versión anterior.' 'Files of version {0} are present: press Rebuild to apply it (a few minutes; your saves are kept). Until then you can keep playing the previous build.'
 
+$S.FrameMode     = T 'Fotogramas' 'Frame rate'
+$S.FrameModes    = [ordered]@{
+    native60 = T '60 nativos (PC potente)' '60 native (strong PC)'
+    interp60 = T '30 + interpolación a 60 (portátiles)' '30 + interpolated to 60 (laptops)'
+    original = T '30 (como en Wii)' '30 (as on Wii)'
+}
+
 $RepoApi = 'https://api.github.com/repos/jossue4pc/PokePort/releases/latest'
 # Test hook: point the update check at another endpoint (e.g. a local server with a fake release).
 if ($env:POKEPORT_UPDATE_API) { $RepoApi = $env:POKEPORT_UPDATE_API }
@@ -199,7 +206,11 @@ $UpdateScript = Join-Path $PSScriptRoot 'Update-PokePort.ps1'
                 <Button x:Name="ShortcutButton" Style="{StaticResource Pill}" Background="#7A8CC4" FontSize="12" Padding="6,6" Margin="4,0,0,0"/>
               </UniformGrid>
               <TextBlock x:Name="OptionsHeader" FontSize="15" FontWeight="Bold" Foreground="#2B4CA3" Margin="0,8,0,6"/>
-              <CheckBox x:Name="Native60Box" Margin="0,3"/>
+              <DockPanel Margin="0,2,0,4">
+                <TextBlock x:Name="FrameModeLabel" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <ComboBox x:Name="FrameModeBox" Width="215" HorizontalAlignment="Left"/>
+              </DockPanel>
+              <CheckBox x:Name="Native60Box" Margin="0,3" Visibility="Collapsed"/>
               <CheckBox x:Name="WidescreenBox" Margin="0,3"/>
               <CheckBox x:Name="FullscreenBox" Margin="0,3"/>
               <DockPanel Margin="0,6,0,0">
@@ -233,7 +244,7 @@ foreach ($name in @('TitleText','SubtitleText','DiscHeader','DiscBox','BrowseBut
                     'ProgressFill','ProgressText','StatusText','PlayButton','InstallButton','FolderButton','ShortcutButton','OptionsHeader',
                     'Native60Box','WidescreenBox','FullscreenBox','ResolutionLabel','ResolutionBox','InGameText','LogButton','LogBox','LegalText',
                     'VersionText','CheckUpdatesButton','UpdateBanner','UpdateText','NotesButton','UpdateButton','LaterButton','SkipButton',
-                    'ApiLabel','ApiBox','DiagButton','ShareButton')) {
+                    'ApiLabel','ApiBox','DiagButton','ShareButton','FrameModeLabel','FrameModeBox')) {
     $ui[$name] = $window.FindName($name)
 }
 $iconPath = Join-Path $PSScriptRoot 'assets\icon.ico'
@@ -334,6 +345,7 @@ function Get-ConfigValue([string]$Key) {
 
 $resolutions = [ordered]@{ 'Auto' = '0'; '1x (Wii)' = '1'; '2x' = '2'; '3x' = '3'; '4x' = '4' }
 $apis = [ordered]@{ 'Auto' = 'auto'; 'Direct3D 12' = 'd3d12'; 'Vulkan' = 'vulkan' }
+foreach ($k in $S.FrameModes.Keys) { [void]$ui.FrameModeBox.Items.Add($S.FrameModes[$k]) }
 foreach ($k in $apis.Keys) { [void]$ui.ApiBox.Items.Add($k) }
 foreach ($k in $resolutions.Keys) { [void]$ui.ResolutionBox.Items.Add($k) }
 $loadingOptions = $false
@@ -348,6 +360,11 @@ function Update-OptionsFromConfig {
     $selected = 'Auto'
     foreach ($k in $resolutions.Keys) { if ($res -and [double]$res -eq [double]$resolutions[$k]) { $selected = $k } }
     $ui.ResolutionBox.SelectedItem = $selected
+    $native = (Get-ConfigValue 'native_60fps') -ne 'false'
+    $interp = Get-ConfigValue 'frame_interpolation_fps'
+    $mode = $(if ($native) { 'native60' } elseif ($interp -and [int]$interp -ge 60) { 'interp60' } else { 'original' })
+    $ui.FrameModeBox.SelectedItem = $S.FrameModes[$mode]
+    $ui.FrameModeBox.IsEnabled = $installed
     $api = Get-ConfigValue 'graphics_api'
     $apiSelected = 'Auto'
     foreach ($k in $apis.Keys) { if ($api -eq $apis[$k]) { $apiSelected = $k } }
@@ -358,6 +375,16 @@ function Update-OptionsFromConfig {
 $ui.Native60Box.Add_Click({ if (-not $loadingOptions) { Set-ConfigValue 'video' 'native_60fps' ($(if ($ui.Native60Box.IsChecked) { 'true' } else { 'false' })) } })
 $ui.WidescreenBox.Add_Click({ if (-not $loadingOptions) { Set-ConfigValue 'video' 'force_aspect' ($(if ($ui.WidescreenBox.IsChecked) { 'true' } else { 'false' })) } })
 $ui.FullscreenBox.Add_Click({ if (-not $loadingOptions) { Set-ConfigValue 'video' 'display_mode' ($(if ($ui.FullscreenBox.IsChecked) { '"borderless"' } else { '"windowed"' })) } })
+$ui.FrameModeBox.Add_SelectionChanged({
+    if ($loadingOptions -or -not $ui.FrameModeBox.SelectedItem) { return }
+    $label = [string]$ui.FrameModeBox.SelectedItem
+    $mode = @($S.FrameModes.Keys | Where-Object { $S.FrameModes[$_] -eq $label })[0]
+    switch ($mode) {
+        'native60' { Set-ConfigValue 'video' 'native_60fps' 'true';  Set-ConfigValue 'video' 'frame_interpolation_fps' '0' }
+        'interp60' { Set-ConfigValue 'video' 'native_60fps' 'false'; Set-ConfigValue 'video' 'frame_interpolation_fps' '60' }
+        'original' { Set-ConfigValue 'video' 'native_60fps' 'false'; Set-ConfigValue 'video' 'frame_interpolation_fps' '0' }
+    }
+})
 $ui.ApiBox.Add_SelectionChanged({
     if (-not $loadingOptions -and $ui.ApiBox.SelectedItem) {
         Set-ConfigValue 'video' 'graphics_api' ('"' + $apis[[string]$ui.ApiBox.SelectedItem] + '"')
@@ -709,7 +736,11 @@ function Get-DiagnosticSummary([string]$LogPath) {
     $lines = Get-Content -LiteralPath $LogPath -ErrorAction SilentlyContinue
     $cpu = ($lines | Where-Object { $_ -match 'CPU model: (.+)$' } | Select-Object -First 1) -replace '.*CPU model: ', ''
     $gpus = @($lines | Where-Object { $_ -match 'Device: (.+)$' } | ForEach-Object { ($_ -replace '.*Device: ', '').Trim() }) | Select-Object -Unique
-    $api = ($lines | Where-Object { $_ -match 'graphics backend: (.+)$' } | Select-Object -First 1) -replace '.*graphics backend: ', ''
+    # The backend actually used ("[runtime] graphics backend: X"), not the one requested.
+    $api = ($lines | Where-Object { $_ -match '^\s+API: (.+)$' } | Select-Object -First 1) -replace '^\s+API: ', ''
+    $presentMode = ($lines | Where-Object { $_ -match 'present mode (\S+)' } | Select-Object -First 1) -replace '.*present mode ', ''
+    if ($presentMode) { $api += ", present $presentMode" }
+    if ($lines | Where-Object { $_ -match 'Requested graphics backend (\S+) is unavailable' }) { $api += (T ' (la API elegida no está disponible)' ' (the chosen API is unavailable)') }
     $frames = 0
     foreach ($l in $lines) { if ($l -match 'presented frames=(\d+)') { $frames = [int]$Matches[1] } }
     $busy = @(); foreach ($l in $lines) { if ($l -match 'busy ms/frame over \d+ frames: avg ([\d.]+)') { $busy += [double]$Matches[1] } }
@@ -726,7 +757,10 @@ function Get-DiagnosticSummary([string]$LogPath) {
     $text = @()
     $text += (T 'Procesador: ' 'CPU: ') + $cpu
     $text += (T 'Tarjeta gráfica: ' 'GPU: ') + ($gpus -join ', ') + "  ($api)"
-    $text += (T 'Fotogramas mostrados: ' 'Frames presented: ') + $frames
+    $retraces = 0
+    foreach ($l in $lines) { if ($l -match 'presented frames=\d+ retrace=(\d+)') { $retraces = [int]$Matches[1] } }
+    $fps = $(if ($retraces -gt 0) { [Math]::Round(59.94 * $frames / $retraces, 1) } else { 'n/d' })
+    $text += (T 'Fotogramas mostrados: ' 'Frames presented: ') + $frames + (T '  (media ~' '  (average ~') + $fps + ' fps)'
     $text += (T 'Trabajo de CPU por fotograma (media): ' 'CPU work per frame (average): ') + "$avgBusy ms " + (T '(16,7 ms = límite para 60 fps)' '(16.7 ms = budget for 60 fps)')
     $text += (T 'Tirones de más de 25 ms: ' 'Stutters over 25 ms: ') + $hitches.Count + (T '  (peor: ' '  (worst: ') + [Math]::Round($worst, 1) + ' ms)'
     $text += (T '  - por compilación de shaders: ' '  - shader compilation: ') + $shader
@@ -814,6 +848,7 @@ $ui.LogButton.Add_Click({
 
 $ui.VersionText.Text = "v$LocalVersion"
 $ui.ApiLabel.Text = $S.GraphicsApi
+$ui.FrameModeLabel.Text = $S.FrameMode
 $ui.DiagButton.Content = $S.Diagnostic
 $ui.ShareButton.Content = $S.ShareShaders
 $ui.CheckUpdatesButton.Content = $S.CheckUpdates

@@ -1500,7 +1500,42 @@ void DrawStartupScreen() {
     ImGui::PopStyleColor();
 }
 
+// Frames to present before the boot shader preparation may finish: the seed is queued again once the
+// final render layout (internal resolution) is known, a few frames after start.
+constexpr uint64_t kBootSettleFrames = 60;
+uint32_t g_appliedCompileLimit = 0;
+
+uint32_t GameplayCompileLimit(uint32_t workers) {
+    static const uint32_t limit = [] {
+        const uint32_t hw = std::max(1u, std::thread::hardware_concurrency());
+        uint32_t value = hw <= 8 ? 1u : (hw <= 16 ? 2u : 3u);
+        if (const char* env = std::getenv("MKW_SHADER_THREADS"); env != nullptr && *env != 0) {
+            value = static_cast<uint32_t>(std::strtoul(env, nullptr, 10));
+        }
+        return value;
+    }();
+    return std::clamp(limit, 1u, workers);
+}
+
+// Batches (the boot seed, a loading screen, a resolution change) compile with every worker so they finish
+// fast; a stray new pipeline during gameplay uses the small limit so it cannot starve the game thread on
+// CPUs with few cores. Offscreen passes wait for their pipelines, so batches must never be throttled.
+void UpdateShaderWorkerLimit(uint32_t queued) {
+    const uint32_t workers = aurora_get_pipeline_worker_count();
+    if (workers == 0) {
+        return;
+    }
+    const bool booting = !g_bootShadersReady.load(std::memory_order_relaxed);
+    const uint32_t desired = (booting || queued >= 3) ? workers : GameplayCompileLimit(workers);
+    if (desired != g_appliedCompileLimit) {
+        aurora_set_pipeline_worker_limit(desired);
+        g_appliedCompileLimit = desired;
+    }
+}
+
 void UpdateBootShaderState() {
+    const uint32_t queued = aurora_get_queued_pipeline_count();
+    UpdateShaderWorkerLimit(queued);
     if (g_bootShadersReady.load(std::memory_order_relaxed)) {
         return;
     }
@@ -1508,27 +1543,17 @@ void UpdateBootShaderState() {
     if (g_bootShaderWaitStart == Clock::time_point{}) {
         g_bootShaderWaitStart = now;
     }
-    const uint32_t queued = aurora_get_queued_pipeline_count();
     g_bootShaderTotal = std::max(g_bootShaderTotal, queued);
     g_bootShaderNotice |= queued > kBootShaderNoticeThreshold;
-    if (queued == 0 || now - g_bootShaderWaitStart > kBootShaderWaitLimit) {
+    const bool settled = g_presentedFrame >= kBootSettleFrames;
+    if ((queued == 0 && settled) || now - g_bootShaderWaitStart > kBootShaderWaitLimit) {
         g_bootShadersReady.store(true, std::memory_order_release);
-        // The bundled shader seed is compiled with every worker behind the startup screen; during gameplay
-        // keep few compile threads so the game thread is not starved on CPUs with few cores.
-        // MKW_SHADER_THREADS=<n> overrides.
         const uint32_t workers = aurora_get_pipeline_worker_count();
-        if (workers > 0) {
-            const uint32_t hw = std::max(1u, std::thread::hardware_concurrency());
-            uint32_t limit = hw <= 8 ? 1u : (hw <= 16 ? 2u : 3u);
-            if (const char* env = std::getenv("MKW_SHADER_THREADS"); env != nullptr && *env != 0) {
-                limit = static_cast<uint32_t>(std::strtoul(env, nullptr, 10));
-            }
-            limit = std::clamp(limit, 1u, workers);
-            aurora_set_pipeline_worker_limit(limit);
-            RT_LOG(RT_TAG_RUNTIME) << "[shaders] boot preparation done (" << g_bootShaderTotal
-                                   << " queued at most); gameplay compile threads: " << limit << " of " << workers
-                                   << std::endl;
-        }
+        RT_LOG(RT_TAG_RUNTIME) << "[shaders] boot preparation done (" << g_bootShaderTotal
+                               << " queued at most); gameplay compile threads: "
+                               << (workers ? GameplayCompileLimit(workers) : 0u) << " of " << workers
+                               << " (all of them for batches)" << std::endl;
+        UpdateShaderWorkerLimit(queued);
     }
 }
 
