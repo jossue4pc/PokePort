@@ -350,6 +350,7 @@ function Read-NewLogLines {
                 $ui.StatusText.Text = "$($S.Failed): $message"
                 Add-Log "ERROR: $message"
             } elseif ($raw -eq '##FINISHED') {
+                $script:finished = $true
                 $ui.StatusText.Text = $S.Done
             } else {
                 Add-Log $raw
@@ -365,10 +366,18 @@ $timer.Add_Tick({
     if ($script:process -and $script:process.HasExited) {
         Read-NewLogLines
         $timer.Stop()
+        $script:exitCode = $script:process.ExitCode
         $script:process = $null
         $ui.InstallButton.IsEnabled = $true
         $ui.BrowseButton.IsEnabled = $true
         $ui.BrowseDirButton.IsEnabled = $true
+        if (-not $script:failed -and -not $script:finished) {
+            # The installer stopped without reporting success or a specific error.
+            $script:failed = $true
+            $code = $(try { $script:exitCode } catch { '?' })
+            $ui.StatusText.Text = (T 'El instalador se detuvo sin terminar' 'The installer stopped before finishing') + " (exit $code). " + (T 'Mira el registro.' 'See the log.')
+            if ($script:currentStep) { Set-StepState $script:currentStep 'error' }
+        }
         if (-not $script:failed) {
             Update-InstalledState
             $ui.StatusText.Text = $S.Done
@@ -396,10 +405,23 @@ $ui.InstallButton.Add_Click({
     $ui.BrowseDirButton.IsEnabled = $false
     $script:logPath = Join-Path $LogDir ("build_{0:yyyyMMdd_HHmmss}.log" -f (Get-Date))
     $script:logOffset = 0
-    $discArg = $(if (Test-Path -LiteralPath $disc -PathType Container) { "-ExtractedDir `"$disc`"" } else { "-Disc `"$disc`"" })
-    $command = "& '$BuildScript' $discArg *>&1 | Out-File -LiteralPath '$($script:logPath)' -Encoding utf8 -Width 400"
-    $script:process = Start-Process -FilePath 'powershell.exe' -PassThru -WindowStyle Hidden `
-        -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $command)
+    $script:finished = $false
+    # Command-line quoting for a Windows path (paths cannot contain '"'; a trailing '\' would escape the quote).
+    $quote = { param([string]$Value) '"' + $Value.TrimEnd('\') + '"' }
+    $discArg = $(if (Test-Path -LiteralPath $disc -PathType Container) { '-ExtractedDir ' + (& $quote $disc) } else { '-Disc ' + (& $quote $disc) })
+    $startInfo = New-Object Diagnostics.ProcessStartInfo 'powershell.exe'
+    # -File passes each value verbatim (no PowerShell re-parsing), so spaces and apostrophes in names are safe.
+    $startInfo.Arguments = '-NoProfile -ExecutionPolicy Bypass -File ' + (& $quote $BuildScript) + ' ' + $discArg + ' -LogFile ' + (& $quote $script:logPath)
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    try {
+        $script:process = [Diagnostics.Process]::Start($startInfo)
+    } catch {
+        $script:failed = $true
+        $ui.StatusText.Text = "$($S.Failed): $($_.Exception.Message)"
+        $ui.InstallButton.IsEnabled = $true; $ui.BrowseButton.IsEnabled = $true; $ui.BrowseDirButton.IsEnabled = $true
+        return
+    }
     $timer.Start()
 })
 

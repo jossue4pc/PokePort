@@ -28,7 +28,9 @@ param(
     [ValidateSet('all', 'toolchain', 'deps', 'disc', 'translate', 'build', 'install')]
     [string]$Step = 'all',
     [int]$Jobs = 0,
-    [switch]$Clean
+    [switch]$Clean,
+    # Also append every output line to this file (UTF-8, no BOM). The launcher follows it.
+    [string]$LogFile
 )
 
 $ErrorActionPreference = 'Stop'
@@ -360,25 +362,40 @@ function Invoke-InstallStep {
 }
 
 # --- Main --------------------------------------------------------------------------------------------
-$steps = @('toolchain', 'deps', 'disc', 'translate', 'build', 'install')
-if ($Clean) { Reset-StepsFrom $steps }
-if ($Disc -or $ExtractedDir) { Reset-StepsFrom @('disc') }   # a new image always re-validates
-try {
-    foreach ($id in $steps) {
-        if ($Step -ne 'all' -and $Step -ne $id) { continue }
-        if ($Step -eq 'all' -and (Test-StepDone $id)) { Info "Step '$id' already done."; Done $id; continue }
-        switch ($id) {
-            'toolchain' { Invoke-ToolchainStep }
-            'deps'      { Invoke-DepsStep }
-            'disc'      { Invoke-DiscStep }
-            'translate' { Invoke-TranslateStep }
-            'build'     { Invoke-BuildStep }
-            'install'   { Invoke-InstallStep }
+$script:exitCode = 0
+$main = {
+    $steps = @('toolchain', 'deps', 'disc', 'translate', 'build', 'install')
+    try {
+        if ($Clean) { Reset-StepsFrom $steps }
+        if ($Disc -or $ExtractedDir) { Reset-StepsFrom @('disc') }   # a new image always re-validates
+        foreach ($id in $steps) {
+            if ($Step -ne 'all' -and $Step -ne $id) { continue }
+            if ($Step -eq 'all' -and (Test-StepDone $id)) { Info "Step '$id' already done."; Done $id; continue }
+            switch ($id) {
+                'toolchain' { Invoke-ToolchainStep }
+                'deps'      { Invoke-DepsStep }
+                'disc'      { Invoke-DiscStep }
+                'translate' { Invoke-TranslateStep }
+                'build'     { Invoke-BuildStep }
+                'install'   { Invoke-InstallStep }
+            }
+            Set-StepDone $id
         }
-        Set-StepDone $id
+        Write-Output '##FINISHED'
+    } catch {
+        Write-Output "##ERROR $($_.Exception.Message)"
+        $script:exitCode = 1
     }
-    Write-Output '##FINISHED'
-} catch {
-    Write-Output "##ERROR $($_.Exception.Message)"
-    exit 1
 }
+if ($LogFile) {
+    $logEncoding = New-Object Text.UTF8Encoding($false)
+    [IO.File]::WriteAllText($LogFile, "PokePort build log $(Get-Date -Format o)`r`n", $logEncoding)
+    & $main *>&1 | ForEach-Object {
+        $line = "$_"
+        [IO.File]::AppendAllText($LogFile, $line + "`r`n", $logEncoding)
+        $line
+    }
+} else {
+    & $main
+}
+exit $script:exitCode
