@@ -156,14 +156,14 @@ static bool IsDvdDataRoot(const fs::path& path) {
     }
     std::fprintf(stderr,
                  "\n[dvd] Set [paths] dvd_root in Config.toml "
-                 "to your extracted Mario Kart Wii DATA directory.\n");
+                 "to your extracted game DATA directory.\n");
     std::string details = source ? source : "The configured DVD root could not be opened.";
     if (!path.empty()) {
         details += "\n\nPath: ";
         details += HostPathText(path);
     }
     details += "\n\nSet [paths] dvd_root in Config.toml to the extracted "
-               "Mario Kart Wii DATA directory.";
+               "game DATA directory.";
     FailDvd("dvd_root", "DVD data is unavailable", details);
 }
 
@@ -800,8 +800,7 @@ static void CompleteDvdCancelState()
     // executing command block. The RVL SDK keeps `executing` pointing at its static DummyCommandBlock when
     // idle, never NULL: PokéPark's DVD driver dereferences it (executing->callback at +0x28), and NULL reads
     // 0x80000028 = physical memory size 0x01800000 as a "function pointer". (MKWii tolerates 0.)
-    // TODO(generic runtime): move the per-game DummyCommandBlock address into the game table.
-    Memory::Write32(MKW_GADDR(803866F0), ::GuestRegion::IsMarioKart() ? 0u : 0x803ED4A0u /* DummyCommandBlock */);
+    Memory::Write32(MKW_GADDR(803866F0), ::GuestRegion::CurrentFacts().dvdDummyCommandBlock);
 }
 
 // 0x8015EA1C -> DVDInit

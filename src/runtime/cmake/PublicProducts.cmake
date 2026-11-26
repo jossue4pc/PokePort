@@ -7,15 +7,15 @@
 # Per-game data the runtime reads but does not own. Kept out of the runtime
 # library so that library stays game-independent (and can be precompiled).
 set(MKW_GAME_DATA_SOURCES "")
-set(DATA_INIT_FILE "${MKW_RUNTIME_SOURCE_DIR}/../generated/data_sections_init.cpp")
-set(DATA_INIT_BLOB_ASM "${MKW_RUNTIME_SOURCE_DIR}/../generated/data_sections_init_blobs.S")
+set(DATA_INIT_FILE "${MKW_GENERATED_ROOT}/generated/data_sections_init.cpp")
+set(DATA_INIT_BLOB_ASM "${MKW_GENERATED_ROOT}/generated/data_sections_init_blobs.S")
 if(EXISTS "${DATA_INIT_FILE}")
     list(APPEND MKW_GAME_DATA_SOURCES "${DATA_INIT_FILE}")
 endif()
 # Crash-report symbolization table emitted by generate-data-init. The stub
 # (deliberately outside the globbed src/ tree so it is never picked up twice)
 # keeps link succeeding when the generated table has not been produced yet.
-set(GUEST_SYMBOL_TABLE_FILE "${MKW_RUNTIME_SOURCE_DIR}/../generated/guest_symbol_table.cpp")
+set(GUEST_SYMBOL_TABLE_FILE "${MKW_GENERATED_ROOT}/generated/guest_symbol_table.cpp")
 if(EXISTS "${GUEST_SYMBOL_TABLE_FILE}")
     list(APPEND MKW_GAME_DATA_SOURCES "${GUEST_SYMBOL_TABLE_FILE}")
 else()
@@ -180,7 +180,7 @@ function(mkw_configure_product target)
         "${MKW_RUNTIME_SOURCE_DIR}/src"
         # Workspace root, so translator output is spelled "generated/<x>.h"
         # instead of a ../ chain whose depth depends on the includer.
-        "${MKW_RUNTIME_SOURCE_DIR}/.."
+        "${MKW_GENERATED_ROOT}"
         "${MKW_AURORA_DIR}/include")
     target_compile_definitions(${target} PRIVATE
         SDL_MAIN_HANDLED _DISABLE_STRING_ANNOTATION _DISABLE_VECTOR_ANNOTATION TARGET_PC)

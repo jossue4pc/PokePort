@@ -1,3 +1,8 @@
+#include "abi_bridge.h"
+#include "fiber_manager.h"
+#include "guest_abi/guest_region.h"
+#include <chrono>
+#include <atomic>
 #include "memory.h"
 #include "hle_stubs.h"
 #include "ppc_runtime.h"
@@ -41,12 +46,64 @@ uint64_t ReadSystemTime()
 }
 } // namespace OsHleInternal
 
+// Busy-waits on interrupt-driven state ("while (queue full && OSGetTick() - t0 < timeout) {}", Rabbids' K3D
+// frame queue) never see an interrupt in translated code. For such games the time reads double as interrupt
+// points: due VI retraces and alarms (incl. GX breakpoint/token callbacks) are delivered, at most every 1 ms.
+extern "C" void OS_HLE_ProcessAlarmsDeferred(int maxToProcess);
+extern "C" void SelectThread_801a9c08(CpuContext* ctx);
+static void ServiceInterruptsFromTimeRead(CpuContext* ctx)
+{
+    if (!::GuestRegion::IsRabbids()) {
+        return;
+    }
+    static thread_local bool s_inService = false;
+    static std::atomic<int64_t> s_nextPollNs{0};
+    if (s_inService || !Fiber::GuestFiberManager::IsInitialized()) {
+        return;
+    }
+    const int64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    int64_t next = s_nextPollNs.load(std::memory_order_relaxed);
+    if (now < next || !s_nextPollNs.compare_exchange_strong(next, now + 1000000)) {
+        return;
+    }
+    s_inService = true;
+    try {
+        VI_HLE_ProcessRetracesDeferred(8);
+        OS_HLE_ProcessAlarmsDeferred(8);
+        // Interrupt exit: a woken higher-priority thread (K3D's CleanupThread drains the frame queue
+        // after each GX breakpoint) runs now, as __OSReschedule does on hardware.
+        if (ctx != nullptr && OS_HLE_InterruptsEnabled() && ::Memory::Read32(MKW_GADDR(8038691C)) != 0) {
+            const uint32_t r3 = ctx->gpr[3];
+            ctx->gpr[3] = 0;
+            SelectThread_801a9c08(ctx);
+            ctx->gpr[3] = r3;
+        }
+    } catch (...) {
+        s_inService = false;
+        throw;
+    }
+    s_inService = false;
+}
+
+// OSGetTick -> lower 32 bits of the time base. Synthetic identity (MKWii inlines mftb).
+extern "C" void OSGetTick_8fff0040(CpuContext* ctx)
+{
+    uint32_t hi = 0;
+    uint32_t lo = 0;
+    ReadTimeBaseRegisters(hi, lo);
+    ServiceInterruptsFromTimeRead(ctx);
+    ctx->gpr[3] = lo;
+}
+REGISTER_NATIVE_WRAPPER_AS(0x8FFF0040, OSGetTick_8fff0040, "OSGetTick_8fff0040");
+
 // OSGetTime -> returns 64-bit time base (hi in r3, lo in r4).
 extern "C" void OS__GetTime_HLE(CpuContext* ctx)
 {
     if (!ctx) {
         return;
     }
+    ServiceInterruptsFromTimeRead(ctx);
 
     uint32_t hi = 0;
     uint32_t lo = 0;

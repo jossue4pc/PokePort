@@ -1309,7 +1309,7 @@ void DrawGraphicsSettings() {
     ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 380.0f);
     ImGui::TextDisabled("Frame interpolation is experimental, you might find visual artifacts");
     ImGui::PopTextWrapPos();
-    if (!::GuestRegion::IsMarioKart()) {
+    if (::GuestRegion::IsPokePark()) {
         if (ImGui::Checkbox("Native 60 FPS (Park scenes)", &g_pokeParkNative60)) {
             RuntimeConfigFile::SetPokeParkNative60(g_pokeParkNative60);
         }

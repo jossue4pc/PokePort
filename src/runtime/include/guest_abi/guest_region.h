@@ -23,8 +23,12 @@ enum class Id : uint8_t {
     // identities the runtime names to PokéPark addresses. An identity absent from that DOL gets a
     // unique, unmapped sentinel 0xF0xxxxxx (never a guest address), so constant-keyed templates stay distinct.
     PokeParkU = 3,
+    // Rabbids Go Home (RGWE41): same idea, column generated from LynWiiRetail.elf's symbols.
+    RabbidsU = 4,
 };
-inline constexpr size_t kCount = 4;
+inline constexpr size_t kCount = 5;
+// Columns >= kFirstOtherGame are other games, not MKWii regions.
+inline constexpr size_t kFirstOtherGame = 3;
 
 struct Row {
     uint32_t address[kCount];
@@ -96,9 +100,33 @@ constexpr Mapping Map(uint32_t pal, Id region) {
 constexpr Row RowOf(uint32_t pal) {
     const Mapping ntscU = Map(pal, Id::NtscU);
     const Mapping ntscJ = Map(pal, Id::NtscJ);
-    const Mapping pokepark = Map(pal, Id::PokeParkU);
-    return ntscU.found && ntscJ.found ? Row{{pal, ntscU.address, ntscJ.address, pokepark.found ? pokepark.address : (0xF0000000u | (pal & 0x00FFFFFFu))}}
-                                      : throw "PAL address outside guest_abi/guest_versions.inc";
+    if (!ntscU.found || !ntscJ.found) {
+        throw "PAL address outside guest_abi/guest_versions.inc";
+    }
+    Row row{{pal, ntscU.address, ntscJ.address}};
+    for (size_t game = kFirstOtherGame; game < kCount; ++game) {
+        const Mapping other = Map(pal, static_cast<Id>(game));
+        row.address[game] = other.found ? other.address : (0xF0000000u | (pal & 0x00FFFFFFu));
+    }
+    return row;
+}
+
+constexpr bool SameInEveryColumn(const Row& row, uint32_t pal) {
+    for (size_t i = 1; i < kCount; ++i) {
+        if (row.address[i] != pal) {
+            return false;
+        }
+    }
+    return true;
+}
+
+constexpr bool InAnyColumn(const Row& row, uint32_t target) {
+    for (size_t i = 0; i < kCount; ++i) {
+        if (row.address[i] == target) {
+            return true;
+        }
+    }
+    return false;
 }
 
 } // namespace GuestRegion
@@ -110,13 +138,15 @@ namespace GuestRegion {
 
 inline Id Current() noexcept { return static_cast<Id>(kMkwGuestRegion); }
 
-// False when the translated game is not Mario Kart Wii (PokéPark): MKWii-only modules stand down.
-inline bool IsMarioKart() noexcept { return Current() != Id::PokeParkU; }
+// False when the translated game is not Mario Kart Wii: MKWii-only modules stand down.
+inline bool IsMarioKart() noexcept { return static_cast<size_t>(Current()) < kFirstOtherGame; }
+inline bool IsPokePark() noexcept { return Current() == Id::PokeParkU; }
+inline bool IsRabbids() noexcept { return Current() == Id::RabbidsU; }
 
 template <uint32_t Pal>
 inline uint32_t Address() noexcept {
     constexpr Row row = RowOf(Pal);
-    if constexpr (row.address[1] == Pal && row.address[2] == Pal && row.address[3] == Pal) {
+    if constexpr (SameInEveryColumn(row, Pal)) {
         return Pal;
     } else {
         return row.In(Current());
@@ -127,9 +157,7 @@ inline uint32_t Address() noexcept {
 template <uint32_t Pal>
 inline bool Is(uint32_t target) noexcept {
     constexpr Row row = RowOf(Pal);
-    return (target == row.address[0] || target == row.address[1] || target == row.address[2] ||
-            target == row.address[3]) &&
-           target == row.In(Current());
+    return InAnyColumn(row, target) && target == row.In(Current());
 }
 
 [[noreturn]] void FatalUnknownAddress(uint32_t pal) noexcept;
@@ -141,7 +169,7 @@ inline uint32_t Translate(uint32_t pal) noexcept {
         // PokéPark: a native whose SDK function is not in this DOL is simply not registered
         // (TranslatedFunctionRegistry::Register ignores address 0).
         // 0x8FFFxxxx are synthetic identities for PokéPark-only natives (no MKWii counterpart).
-        if (Current() == Id::PokeParkU || pal >= 0x8FFF0000u) {
+        if (!IsMarioKart() || pal >= 0x8FFF0000u) {
             return 0;
         }
         FatalUnknownAddress(pal);
@@ -163,17 +191,27 @@ struct Facts {
     const char* gameRegion;
     // Translated DOL entry point (__start) the runtime boots.
     uint32_t entryAddress;
+    // IOS the title runs on: (IOS number << 16) | revision (IOS36 v3608, IOS56 v5661, IOS55 v5663).
+    uint32_t iosVersion;
+    // DVD low-level "dummy" command block the HLE marks idle at boot (0 = none).
+    uint32_t dvdDummyCommandBlock;
+    // Run the DOL's .ctors before booting (MKWii/PokéPark). False when they need the game's own
+    // heaps (Rabbids' allocate through MEM_g_Manager): its __start -> __init_cpp runs them itself.
+    bool preRunDolCtors;
+    // Fixed home of a run-time module the port pre-translates (Rabbids' Ai2CppWiiFinal.rso, see
+    // hle/game/rabbids_rso.cpp). MEM1 arena hi is capped at rsoModuleBase and MEM2 arena hi at
+    // rsoScratchBase, so the game's heaps never overlap them. 0 = none.
+    uint32_t rsoModuleBase;
+    uint32_t rsoBssBase;
+    uint32_t rsoScratchBase;
+    uint32_t rsoScratchSize;
 };
 
-inline constexpr Facts kFacts[kCount] = {
-    {"RMCP01", 'P', 0x524D4350u, 1u, 0x80399180u, "EUR", "RVL-001(EUR)", "LEH", "PAL", "EU", 0x800060A4u},
-    {"RMCE01", 'E', 0x524D4345u, 0u, 0x80394E00u, "USA", "RVL-001(USA)", "LU", "NTSC", "US", 0x800060A4u},
-    {"RMCJ01", 'J', 0x524D434Au, 0u, 0x80398B00u, "JPN", "RVL-001(JPN)", "LJ", "NTSC", "JP", 0x800060A4u},
-    // PokéPark: MEM1 arena lo = OSInit's align32(0x8049A040) (stack top from __init_registers).
-    {"R8AE01", 'E', 0x52384145u, 0u, 0x8049A040u, "USA", "RVL-001(USA)", "LU", "NTSC", "US", 0x80004050u},
-};
+// One row per GuestRegion::Id, in guest_region.cpp (kept out of this widely included header so a
+// per-game value change does not rebuild every translated shard).
+extern const Facts kFacts[kCount];
 
-inline const Facts& CurrentFacts() noexcept { return kFacts[static_cast<size_t>(Current())]; }
+const Facts& CurrentFacts() noexcept;
 
 } // namespace GuestRegion
 

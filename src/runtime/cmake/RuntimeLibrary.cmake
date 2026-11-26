@@ -53,7 +53,7 @@ function(mkw_configure_object_target target)
         "${MKW_RUNTIME_SOURCE_DIR}/src"
         # Workspace root, so translator output is spelled "generated/<x>.h"
         # instead of a ../ chain whose depth depends on the includer.
-        "${MKW_RUNTIME_SOURCE_DIR}/.."
+        "${MKW_GENERATED_ROOT}"
         "${MKW_AURORA_DIR}/include")
     target_compile_definitions(${target} PRIVATE
         TARGET_PC)

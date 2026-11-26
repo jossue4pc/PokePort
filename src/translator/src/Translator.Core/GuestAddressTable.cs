@@ -10,6 +10,8 @@ public enum GuestRegion
     NtscJ = 2,
     /// <summary>PokéPark Wii (R8AE01): another game mapped onto the runtime's PAL identities.</summary>
     PokeParkU = 3,
+    /// <summary>Rabbids Go Home (RGWE41): same, column generated from LynWiiRetail.elf's symbols.</summary>
+    RabbidsU = 4,
 }
 
 public static class GuestRegions
@@ -24,6 +26,7 @@ public static class GuestRegions
         "RMCJ01" => GuestRegion.NtscJ,
         "RMCP01" => GuestRegion.Pal,
         "R8AE01" => GuestRegion.PokeParkU,
+        "RGWE41" => GuestRegion.RabbidsU,
         { } id when id.StartsWith("RMC", StringComparison.Ordinal) =>
             throw new InvalidDataException($"Mario Kart Wii release '{gameId}' is not supported."),
         _ => GuestRegion.Pal,

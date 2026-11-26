@@ -66,7 +66,8 @@ extern "C" int32_t OS__DisableInterrupts_801a65ac()
 extern "C" void OS_HLE_ProcessAlarmsDeferred(int maxToProcess);
 static void PumpDueAlarmsOnInterruptEnable()
 {
-    if (::GuestRegion::IsMarioKart()) {
+    static const bool s_disabled = [] { const char* v = std::getenv("MKW_NO_ALARM_PUMP"); return v && *v == '1'; }();
+    if (::GuestRegion::IsMarioKart() || s_disabled) {
         return;
     }
     static thread_local int64_t s_lastPumpNs = 0;

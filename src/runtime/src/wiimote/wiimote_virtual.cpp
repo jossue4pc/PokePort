@@ -11,6 +11,9 @@
 //   MKW_WIIMOTE_SCRIPT=t:btn:dur[,t:btn:dur...]  scripted presses for headless tests;
 //        t/dur in seconds from the first data report, btn among A B 1 2 + - H U D L R S(shake)
 //   MKW_WIIMOTE_LOG=1         log output reports from the game
+//   MKW_NUNCHUK=0|1           force the Nunchuk off/on (default: on for Rabbids Go Home)
+// With a Nunchuk the C-stick is the pointer: the IR camera sees the two sensor-bar dots move
+// opposite to where the remote points (basic and extended IR formats).
 
 #include "bluetooth/bt_controller.h"
 #include "guest_abi/guest_region.h"
@@ -60,8 +63,9 @@ struct ScriptPress {
 // ---------------------------------------------------------------------------------------------
 // Mapping (F10 > Controller settings > Wii Remote (virtual); Config.toml [controller])
 // ---------------------------------------------------------------------------------------------
-constexpr const char* kButtonKeys[Virtual::kButtonCount] = {"A", "B", "1", "2", "+", "-", "H", "S"};
-constexpr const char* kButtonLabels[Virtual::kButtonCount] = {"A", "B", "1", "2", "+ (Plus)", "- (Minus)", "HOME", "Shake"};
+constexpr const char* kButtonKeys[Virtual::kButtonCount] = {"A", "B", "1", "2", "+", "-", "H", "S", "C", "Z"};
+constexpr const char* kButtonLabels[Virtual::kButtonCount] = {"A", "B", "1", "2", "+ (Plus)", "- (Minus)", "HOME", "Shake",
+                                                              "Nunchuk C", "Nunchuk Z"};
 constexpr const char* kSourceKeys[Virtual::kSourceCount] = {"None", "A", "B", "X", "Y", "Z", "Start", "L", "R", "CStick"};
 constexpr const char* kSourceLabels[Virtual::kSourceCount] = {"None", "A", "B", "X", "Y", "Z", "Start", "L", "R", "C-stick (any direction)"};
 
@@ -109,7 +113,7 @@ Virtual::Mapping CurrentMapping() {
     if (!g_mappingLoaded) {
         g_mappingLoaded = true;
         g_mapping = ParseMapping(RuntimeConfigFile::VirtualWiimoteMap(),
-                                 RuntimeConfigFile::VirtualWiimoteUpright(EnvFlag("MKW_WIIMOTE_UPRIGHT")));
+                                 RuntimeConfigFile::VirtualWiimoteUpright(EnvFlag("MKW_WIIMOTE_UPRIGHT") || Virtual::NunchukAttached()));
     }
     return g_mapping;
 }
@@ -131,7 +135,11 @@ bool SourceActive(int source, const PADStatus& pad) {
     }
 }
 
-constexpr uint16_t kButtonBits[Virtual::kButtonCount] = {0x0008, 0x0004, 0x0002, 0x0001, 0x1000, 0x0010, 0x0080, 0};
+constexpr uint16_t kButtonBits[Virtual::kButtonCount] = {0x0008, 0x0004, 0x0002, 0x0001, 0x1000, 0x0010, 0x0080, 0, 0, 0};
+
+// Nunchuk register block (0xA400xx), unencrypted. Calibration as Dolphin ships it.
+constexpr uint8_t kNunchukAccelZero = 0x80, kNunchukAccelOneG = 0xB3;
+constexpr uint8_t kNunchukStickCenter = 0x80, kNunchukStickMin = 0x20, kNunchukStickMax = 0xE0;
 
 class VirtualRemote {
 public:
@@ -150,6 +158,22 @@ public:
         std::memcpy(m_eeprom.data(), kCal, sizeof(kCal));
         m_speakerRegs.fill(0);
         m_irRegs.fill(0);
+        m_nunchuk = Virtual::NunchukAttached();
+        m_extRegs.fill(0);
+        if (m_nunchuk) {
+            uint8_t cal[16] = {kNunchukAccelZero, kNunchukAccelZero, kNunchukAccelZero, 0,
+                               kNunchukAccelOneG, kNunchukAccelOneG, kNunchukAccelOneG, 0,
+                               kNunchukStickMax, kNunchukStickMin, kNunchukStickCenter,
+                               kNunchukStickMax, kNunchukStickMin, kNunchukStickCenter, 0, 0};
+            uint8_t sum = 0;
+            for (int i = 0; i < 14; ++i) sum = static_cast<uint8_t>(sum + cal[i]);
+            cal[14] = static_cast<uint8_t>(sum + 0x55);
+            cal[15] = static_cast<uint8_t>(sum + 0xAA);
+            std::memcpy(&m_extRegs[0x20], cal, sizeof(cal));
+            std::memcpy(&m_extRegs[0x30], cal, sizeof(cal));
+            static const uint8_t kId[6] = {0x00, 0x00, 0xA4, 0x20, 0x00, 0x00};
+            std::memcpy(&m_extRegs[0xFA], kId, sizeof(kId));
+        }
         m_pending.clear();
         m_mode = 0x30;
         m_continuous = false;
@@ -262,6 +286,7 @@ private:
         std::vector<uint8_t> r;
         Header(r, 0x20);
         uint8_t lf = static_cast<uint8_t>(m_leds << 4);
+        if (m_nunchuk) lf |= 0x02;
         if (m_speakerEnabled) lf |= 0x04;
         if (m_irEnabled) lf |= 0x08;
         r.push_back(lf);
@@ -279,7 +304,14 @@ private:
         switch ((address >> 16) & 0xFE) {
         case 0xA2: limit = m_speakerRegs.size(); return m_speakerRegs.data();
         case 0xB0: limit = m_irRegs.size(); return m_irRegs.data();
-        default: limit = 0; return nullptr; // 0xA4: no extension attached
+        case 0xA4:
+            if (m_nunchuk) {
+                limit = m_extRegs.size();
+                return m_extRegs.data();
+            }
+            limit = 0;
+            return nullptr;
+        default: limit = 0; return nullptr;
         }
     }
 
@@ -309,6 +341,7 @@ private:
             r.push_back(static_cast<uint8_t>(a >> 8));
             r.push_back(static_cast<uint8_t>(a));
             for (uint32_t i = 0; i < 16; ++i) r.push_back(i < chunk ? base[offset + done + i] : 0);
+            if (registers && ((address >> 16) & 0xFE) == 0xA4) EncodeExt(r.data() + r.size() - 16, chunk, offset + done);
             m_pending.push_back(std::move(r));
         }
     }
@@ -327,6 +360,18 @@ private:
             error = 8;
         } else {
             std::memcpy(base + offset, data + 6, length);
+            if (registers && ((address >> 16) & 0xFE) == 0xA4) {
+                static int s_extWrites = 0;
+                if (s_extWrites++ < 16) {
+                    std::fprintf(stderr, "[vwiimote] ext write 0x%06X len %u:", address, length);
+                    for (uint32_t i = 0; i < length; ++i) std::fprintf(stderr, " %02X", data[6 + i]);
+                    std::fputc('\n', stderr);
+                }
+            }
+            if (registers && ((address >> 16) & 0xFE) == 0xA4 && offset <= 0xF0 && offset + length > 0xF0 &&
+                base[0xF0] == 0xAA) {
+                std::fprintf(stderr, "[vwiimote] game enabled extension encryption (encoded with the game's WPAD tables)\n");
+            }
         }
         Ack(0x16, error);
     }
@@ -388,6 +433,8 @@ private:
         }
         uint16_t buttons = 0;
         bool shake = false;
+        uint8_t nunchukX = kNunchukStickCenter, nunchukY = kNunchukStickCenter;
+        bool nunchukC = false, nunchukZ = false;
         PADStatus statuses[PAD_CHANMAX]{};
         PADRead(statuses);
         InputBindings::Apply(statuses);
@@ -395,10 +442,20 @@ private:
         if (pad.err == PAD_ERR_NONE && !InputBindings::InputBlocked()) {
             const Virtual::Mapping mapping = CurrentMapping();
             const uint16_t b = pad.button;
-            const bool up = (b & PAD_BUTTON_UP) || pad.stickY > 48;
-            const bool down = (b & PAD_BUTTON_DOWN) || pad.stickY < -48;
-            const bool left = (b & PAD_BUTTON_LEFT) || pad.stickX < -48;
-            const bool right = (b & PAD_BUTTON_RIGHT) || pad.stickX > 48;
+            // With a Nunchuk the stick is the Nunchuk's; the remote's d-pad is the pad's d-pad only.
+            const bool stickIsDpad = !m_nunchuk;
+            const bool up = (b & PAD_BUTTON_UP) || (stickIsDpad && pad.stickY > 48);
+            const bool down = (b & PAD_BUTTON_DOWN) || (stickIsDpad && pad.stickY < -48);
+            const bool left = (b & PAD_BUTTON_LEFT) || (stickIsDpad && pad.stickX < -48);
+            const bool right = (b & PAD_BUTTON_RIGHT) || (stickIsDpad && pad.stickX > 48);
+            if (m_nunchuk) {
+                auto axis = [](int v) {
+                    const int scaled = kNunchukStickCenter + v * (kNunchukStickMax - kNunchukStickCenter) / 100;
+                    return static_cast<uint8_t>(std::clamp(scaled, 0, 255));
+                };
+                nunchukX = axis(pad.stickX);
+                nunchukY = axis(pad.stickY);
+            }
             if (mapping.upright) {
                 if (up) buttons |= kUp;
                 if (down) buttons |= kDown;
@@ -415,6 +472,10 @@ private:
                 if (!SourceActive(mapping.source[button], pad)) continue;
                 if (button == Virtual::kShake) {
                     shake = true;
+                } else if (button == Virtual::kC) {
+                    nunchukC = true;
+                } else if (button == Virtual::kZ) {
+                    nunchukZ = true;
                 } else {
                     buttons |= kButtonBits[button];
                 }
@@ -429,7 +490,31 @@ private:
         }
         m_buttons = buttons;
         m_shake = shake;
+        m_nunchukX = nunchukX;
+        m_nunchukY = nunchukY;
+        if (m_nunchuk && pad.err == PAD_ERR_NONE) {
+            // Smooth the stick a little so the cursor does not jitter at the edges of the dead zone.
+            const float tx = std::clamp(pad.substickX / 100.0f, -1.0f, 1.0f);
+            const float ty = std::clamp(pad.substickY / 100.0f, -1.0f, 1.0f);
+            m_pointerX += (tx - m_pointerX) * 0.5f;
+            m_pointerY += (ty - m_pointerY) * 0.5f;
+        }
+        m_nunchukC = nunchukC;
+        m_nunchukZ = nunchukZ;
         ++m_sampleCount;
+    }
+
+    // Encodes extension bytes once the game enabled encryption (0xAA at 0xF0); offset = register offset of
+    // the first byte (0 for data reports).
+    void EncodeExt(uint8_t* bytes, size_t n, uint32_t offset) {
+        if (!m_nunchuk || m_extRegs[0xF0] != 0xAA) return;
+        uint8_t ft[8], sb[8];
+        const auto provider = Virtual::CurrentExtCipherProvider();
+        if (provider == nullptr || !provider(ft, sb)) return;
+        for (size_t i = 0; i < n; ++i) {
+            const size_t j = (offset + i) % 8;
+            bytes[i] = static_cast<uint8_t>((bytes[i] - ft[j]) ^ sb[j]);
+        }
     }
 
     void BuildDataReport(std::vector<uint8_t>& r) {
@@ -451,8 +536,56 @@ private:
             r.push_back(ay);
             r.push_back(az);
         };
-        auto ir = [&](size_t n) { r.insert(r.end(), n, 0xFF); };
-        auto ext = [&](size_t n) { r.insert(r.end(), n, 0x00); };
+        auto ir = [&](size_t n) {
+            if (!m_nunchuk || !m_irEnabled) {
+                r.insert(r.end(), n, 0xFF);
+                return;
+            }
+            // Two dots 200 px apart around the camera centre, moving opposite to the pointer.
+            const int midX = 512 - static_cast<int>(m_pointerX * 380.0f);
+            const int midY = 384 + static_cast<int>(m_pointerY * 300.0f);
+            const int x1 = std::clamp(midX - 100, 0, 1023), x2 = std::clamp(midX + 100, 0, 1023);
+            const int y = std::clamp(midY, 0, 767);
+            if (n == 12) { // extended: X, Y, (Yhi<<6 | Xhi<<4 | size) per object
+                for (int x : {x1, x2}) {
+                    r.push_back(static_cast<uint8_t>(x));
+                    r.push_back(static_cast<uint8_t>(y));
+                    r.push_back(static_cast<uint8_t>(((y >> 8) << 6) | ((x >> 8) << 4) | 3));
+                }
+                r.insert(r.end(), 6, 0xFF);
+                return;
+            }
+            // basic: one 5-byte pair, the second pair absent
+            r.push_back(static_cast<uint8_t>(x1));
+            r.push_back(static_cast<uint8_t>(y));
+            r.push_back(static_cast<uint8_t>(((y >> 8) << 6) | ((x1 >> 8) << 4) | ((y >> 8) << 2) | (x2 >> 8)));
+            r.push_back(static_cast<uint8_t>(x2));
+            r.push_back(static_cast<uint8_t>(y));
+            r.insert(r.end(), n - 5, 0xFF);
+        };
+        auto ext = [&](size_t n) {
+            if (!m_nunchuk || n < 6) {
+                r.insert(r.end(), n, 0x00);
+                return;
+            }
+            // SX SY AX AY AZ, then Z (bit 0) and C (bit 1), active low, above the accel LSBs.
+            r.push_back(m_nunchukX);
+            r.push_back(m_nunchukY);
+            // Shake moves the Nunchuk too (games ask for either; same swing as the remote's).
+            uint8_t nx = kNunchukAccelZero, ny = kNunchukAccelZero, nz = kNunchukAccelOneG;
+            if (m_shake) {
+                const bool phase = ((m_sampleCount / 3) & 1) != 0;
+                nx = phase ? 0xE0 : 0x20;
+                ny = phase ? 0xD0 : 0x30;
+                nz = phase ? 0xF0 : 0x40;
+            }
+            r.push_back(nx);
+            r.push_back(ny);
+            r.push_back(nz);
+            r.push_back(static_cast<uint8_t>((m_nunchukZ ? 0 : 1) | (m_nunchukC ? 0 : 2)));
+            r.insert(r.end(), n - 6, 0x00);
+            EncodeExt(r.data() + r.size() - n, n, 0);
+        };
         switch (mode) {
         case 0x31: accel(); break;
         case 0x32: ext(8); break;
@@ -468,6 +601,11 @@ private:
 
     std::mutex m_mutex;
     std::array<uint8_t, kEepromSize> m_eeprom{};
+    std::array<uint8_t, 0x100> m_extRegs{};
+    bool m_nunchuk = false;
+    uint8_t m_nunchukX = kNunchukStickCenter, m_nunchukY = kNunchukStickCenter;
+    bool m_nunchukC = false, m_nunchukZ = false;
+    float m_pointerX = 0.0f, m_pointerY = 0.0f;
     std::array<uint8_t, 256> m_speakerRegs{};
     std::array<uint8_t, 256> m_irRegs{};
     std::deque<std::vector<uint8_t>> m_pending;
@@ -564,7 +702,13 @@ const char* SourceLabel(int source) { return source >= 0 && source < kSourceCoun
 Mapping DefaultMapping() {
     Mapping mapping;
     // Sideways remote on a PC controller: face buttons A/B -> 2/1 (PokePark's main actions).
-    mapping.source = {kPadX, kPadY, kPadB, kPadA, kPadStart, kPadZ, kPadL, kPadR};
+    mapping.source = {kPadX, kPadY, kPadB, kPadA, kPadStart, kPadZ, kPadL, kPadR, kNone, kNone};
+    if (NunchukAttached()) {
+        // Rabbids: remote upright-style actions on the face buttons, Nunchuk C/Z on the triggers.
+        // A, B under the index finger (R), 1/2 on X/Y, shake on B, C/Z on Z/L; C-stick = pointer.
+        mapping.source = {kPadA, kPadR, kPadX, kPadY, kPadStart, kNone, kNone, kPadB, kPadZ, kPadL};
+        mapping.upright = true;
+    }
     return mapping;
 }
 Mapping Get() { return CurrentMapping(); }
@@ -576,6 +720,16 @@ void Set(const Mapping& mapping) {
     }
     RuntimeConfigFile::SetVirtualWiimoteMap(FormatMapping(mapping));
     RuntimeConfigFile::SetVirtualWiimoteUpright(mapping.upright);
+}
+namespace {
+ExtCipherProvider g_extCipherProvider = nullptr;
+}
+void SetExtCipherProvider(ExtCipherProvider provider) { g_extCipherProvider = provider; }
+ExtCipherProvider CurrentExtCipherProvider() { return g_extCipherProvider; }
+bool NunchukAttached() {
+    const char* v = std::getenv("MKW_NUNCHUK");
+    if (v != nullptr && *v != '\0') return *v != '0';
+    return ::GuestRegion::IsRabbids();
 }
 bool Enabled() {
     const char* v = std::getenv("MKW_VIRTUAL_WIIMOTE");

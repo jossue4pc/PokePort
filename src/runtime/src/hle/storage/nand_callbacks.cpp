@@ -1,3 +1,6 @@
+#include "guest_abi/guest_region.h"
+#include <cstdlib>
+#include <cstdio>
 #include "nand_internal.h"
 #include "guest_callback_state.h"
 
@@ -43,11 +46,38 @@ static void DispatchNandCallback(CpuContext* cpu, uint32_t callbackPtr, int32_t 
     }
 }
 
+// RGWE41: RVL_Nand::ResultCallback / ResultChannelCallback, either queued directly (HLE NAND*Async) or at
+// the end of an ISFS request: _isfsFuncCb(ret, ctx) -> ctx->cb (+256) with ctx->arg (+260) = the
+// NANDCommandBlock, whose callback (+4) is RVL_Nand's.
+static bool IsRabbidsRvlNandCompletion(uint32_t callbackPtr, uint32_t arg) {
+    auto isRvl = [](uint32_t cb) { return cb == 0x80425F48u || cb == 0x80425F58u; };
+    if (isRvl(callbackPtr)) return true;
+    if (callbackPtr != 0x803D7C80u) return false; // _isfsFuncCb
+    try {
+        const uint32_t block = Memory::Read32(arg + 260u);
+        return block >= 0x80000000u && block < 0x81800000u && isRvl(Memory::Read32(block + 4u));
+    } catch (...) {
+        return false;
+    }
+}
+
 void NandQueueIosCallback(uint32_t callbackPtr, int32_t result, uint32_t commandBlock) {
     if (callbackPtr == 0) {
         return;
     }
 
+    static const bool s_log = std::getenv("MKW_NANDLOG") != nullptr;
+    if (s_log) {
+        std::fprintf(stderr, "[nandcb] queue cb=0x%08X result=%d arg=0x%08X%c", callbackPtr, result, commandBlock, 10);
+    }
+    // Rabbids' RVL_Nand spins on a flag its result callbacks set (while (!ms_bNandCallFinished) {}), a loop
+    // that reaches no interrupt point. Those callbacks only store the result and the flag, so they run now.
+    if (::GuestRegion::IsRabbids() && IsRabbidsRvlNandCompletion(callbackPtr, commandBlock)) {
+        if (CpuContext* cpu = TryGetCpuContext()) {
+            DispatchNandCallback(cpu, callbackPtr, result, commandBlock);
+            return;
+        }
+    }
     std::lock_guard<std::mutex> lock(g_pendingNandCallbackMutex);
     g_pendingNandCallbacks.push_back({callbackPtr, result, commandBlock});
 }
@@ -83,6 +113,8 @@ bool NandProcessPendingCallbacks(CpuContext* cpu, int maxToProcess) {
             cb = g_pendingNandCallbacks.front();
             g_pendingNandCallbacks.pop_front();
         }
+        static const bool s_log = std::getenv("MKW_NANDLOG") != nullptr;
+        if (s_log) std::fprintf(stderr, "[nandcb] dispatch cb=0x%08X result=%d%c", cb.callbackPtr, cb.result, 10);
         DispatchNandCallback(cpu, cb.callbackPtr, cb.result, cb.commandBlock);
         ++processed;
     }

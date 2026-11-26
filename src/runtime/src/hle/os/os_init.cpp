@@ -13,6 +13,7 @@
 #include <cstring>
 #include <iostream>
 #include <string>
+#include <sstream>
 #include <thread>
 
 #include "abi_bridge.h"
@@ -337,12 +338,29 @@ PPC_NATIVE_OVERRIDE(8FFF0000, OSGetFontEncode_8fff0000, uint32_t, (), ());
 // this wrapper only logs the outcome.
 extern "C" void OSInitFont_8fff0004(CpuContext* ctx) {
     const uint32_t fontData = ctx->gpr[3];
+    // Font buffers are 0x20120 bytes (ANSI) or 0x120F00 (SJIS); count words changed past the ANSI size.
+    std::vector<uint32_t> past;
+    for (uint32_t off = 0x20120u; off < 0x130000u; off += 4u) {
+        try { past.push_back(::Memory::Read32(fontData + off)); } catch (...) { break; }
+    }
     (*[] {
         static const ::GuestFunctions::Entry entry =
             ::GuestFunctions::NextTranslation(::GuestRegion::Translate(0x8FFF0004u));
         return entry;
     }())(ctx);
-    RT_LOG(RT_TAG_OS) << "OSInitFont(0x" << std::hex << fontData << std::dec << ") -> " << ctx->gpr[3] << std::endl;
+    size_t changed = 0;
+    for (size_t i = 0; i < past.size(); ++i) {
+        const uint32_t addr = fontData + 0x20120u + static_cast<uint32_t>(i) * 4u;
+        const uint32_t now = ::Memory::Read32(addr);
+        if (now != past[i]) {
+            if (++changed <= 8) {
+                RT_LOG(RT_TAG_OS) << "[font] overwritten past the buffer: 0x" << std::hex << addr << " 0x" << past[i]
+                                  << " -> 0x" << now << std::dec << std::endl;
+            }
+        }
+    }
+    RT_LOG(RT_TAG_OS) << "OSInitFont(0x" << std::hex << fontData << std::dec << ") -> " << ctx->gpr[3] << "; words written past "
+                      << "the 0x20120-byte ANSI buffer: " << changed << std::endl;
 }
 REGISTER_NATIVE_WRAPPER_AS(0x8FFF0004, OSInitFont_8fff0004, "OSInitFont_8fff0004");
 
@@ -383,8 +401,11 @@ VirtualIplRom& IplRom() {
 } // namespace
 
 extern "C" uint32_t OSReadROM_8fff0010(uint32_t buf, int32_t length, int32_t offset) {
-    constexpr int32_t kAnsiOffset = 0x1AFF00;
-    constexpr int32_t kSjisOffset = 0x1FCF00;
+    // IPL ROM layout (as Dolphin's EXI IPL device): SJIS font at 0x1AFF00, ANSI font at 0x1FCF00. These were
+    // swapped once: OSInitFont(ANSI) then decoded the 1.1 MB Japanese sheet into a 0x20120-byte buffer and
+    // overran the heap block after it (Rabbids' MEM2 heap).
+    // MKW_FONT_LEGACY_SWAP=1 reproduces the old swap, only to diagnose its effect.
+    static const bool s_legacySwap = std::getenv("MKW_FONT_LEGACY_SWAP") != nullptr;
     VirtualIplRom& rom = IplRom();
     if (length <= 0) return 1u;
     try {
@@ -397,10 +418,10 @@ extern "C" uint32_t OSReadROM_8fff0010(uint32_t buf, int32_t length, int32_t off
                 if (at >= 0 && at < static_cast<int64_t>(image.size())) dst[i] = image[static_cast<size_t>(at)];
             }
         };
-        if (offset >= kSjisOffset) {
-            copyFrom(rom.sjis, kSjisOffset);
-        } else if (offset >= kAnsiOffset) {
-            copyFrom(rom.ansi, kAnsiOffset);
+        if (offset >= 0x1FCF00) {
+            copyFrom(s_legacySwap ? rom.sjis : rom.ansi, 0x1FCF00);
+        } else if (offset >= 0x1AFF00) {
+            copyFrom(s_legacySwap ? rom.ansi : rom.sjis, 0x1AFF00);
         }
     } catch (...) {
         return 0u;

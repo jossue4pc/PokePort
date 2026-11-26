@@ -62,9 +62,9 @@ public sealed record RuntimeNativeIndex(
     /// </summary>
     public RuntimeNativeIndex ForRegion(GuestAddressTable table, GuestRegion region)
     {
-        // MKWii regions must map every address. PokéPark (another game) drops natives whose SDK
-        // function is not in its DOL; the runtime skips registering them the same way.
-        var lenient = region == GuestRegion.PokeParkU;
+        // MKWii regions must map every address. Other games (PokéPark, Rabbids) drop natives whose SDK
+        // function is not in their DOL; the runtime skips registering them the same way.
+        var lenient = region >= GuestRegion.PokeParkU;
         uint MapOrThrow(uint pal) => table.Map(pal, region);
         bool Has(uint pal) => !lenient || table.TryMap(pal, region, out _);
         return new(

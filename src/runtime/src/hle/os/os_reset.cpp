@@ -1,4 +1,8 @@
 #include "memory.h"
+#include "abi_bridge.h"
+#if defined(_WIN32)
+#include <windows.h>
+#endif
 #include "hle/audio/ax_dsp.h"
 #include "gx_worker.h"
 #include "hle_stubs.h"
@@ -10,6 +14,7 @@
 #include <cstdio>
 #include <cstdint>
 #include <string>
+#include <cwchar>
 #include <chrono>
 #include <thread>
 
@@ -47,7 +52,7 @@ extern "C" void PPCHalt_8012E5A4()
     RuntimeCrash::WriteCrashArtifacts("halt", "The guest executed PPCHalt.");
     SetRuntimeExitCode(EXIT_FAILURE);
     ShowRuntimeFatalPopup("the guest operating system halted the console",
-                          "Mario Kart Wii executed PPCHalt, which the console only reaches after an "
+                          "The game executed PPCHalt, which the console only reaches after an "
                           "unrecoverable error.");
     MarkFatalErrorReported();
     std::exit(EXIT_FAILURE);
@@ -94,7 +99,7 @@ extern "C" void OS__Panic_801A2660_Cpu(CpuContext* ctx)
     std::fflush(stderr);
     std::fflush(stdout);
 
-    std::string details = "Mario Kart Wii reported an OS panic";
+    std::string details = "The game reported an OS panic";
     if (!file.empty()) {
         details += " at ";
         details += file;
@@ -135,6 +140,57 @@ extern "C" uint32_t OSResetSystem()
 
 PPC_NATIVE_OVERRIDE(801A8A80, OSResetSystem, uint32_t, (), ());
 
+// ----------------------------------------------------------------------------
+// Leaving the game the other ways (HOME menu "Wii Menu" / "Reset", the power button, the disc-error
+// screen). On a console these reboot into the system menu or relaunch the title through
+// ESP_LaunchTitle -> IOS_IoctlvReboot, i.e. raw IPC registers, which the HLE IOS does not have:
+// IPCWriteReg aborts. Synthetic identities (other games map them in guest_versions.inc).
+// ----------------------------------------------------------------------------
+namespace {
+[[noreturn]] void ExitCleanly(const char* why)
+{
+    RT_LOGF(RT_TAG_OS, "%s: closing the game\n", why);
+    std::fflush(stderr);
+    GxWorker::Stop();
+    AxDspHle::ShutdownMixWorker();
+    SetRuntimeExitCode(0);
+    std::exit(EXIT_SUCCESS);
+}
+} // namespace
+
+// OSShutdownSystem (power button)
+extern "C" void OSShutdownSystem_8fff0050(CpuContext* ctx) { (void)ctx; ExitCleanly("OSShutdownSystem"); }
+REGISTER_NATIVE_WRAPPER_AS(0x8FFF0050, OSShutdownSystem_8fff0050, "OSShutdownSystem_8fff0050");
+
+// __OSReturnToMenu (OSReturnToMenu / OSReturnToDataManager / OSReturnToSetting...: HOME menu "Wii Menu")
+extern "C" void OSReturnToMenu_8fff0054(CpuContext* ctx) { (void)ctx; ExitCleanly("OSReturnToMenu"); }
+REGISTER_NATIVE_WRAPPER_AS(0x8FFF0054, OSReturnToMenu_8fff0054, "OSReturnToMenu_8fff0054");
+
+// __OSReturnToMenuForError (after the disc/NAND error screens)
+extern "C" void OSReturnToMenuForError_8fff0058(CpuContext* ctx) { (void)ctx; ExitCleanly("OSReturnToMenuForError"); }
+REGISTER_NATIVE_WRAPPER_AS(0x8FFF0058, OSReturnToMenuForError_8fff0058, "OSReturnToMenuForError_8fff0058");
+
+// OSRestart (HOME menu "Reset"): start a fresh copy of this executable with the same command line.
+extern "C" void OSRestart_8fff005c(CpuContext* ctx)
+{
+    (void)ctx;
+#if defined(_WIN32)
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    std::wstring commandLine = GetCommandLineW();
+    if (CreateProcessW(nullptr, commandLine.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        RT_LOGF(RT_TAG_OS, "OSRestart: relaunched the game\n");
+    } else {
+        RT_LOGF(RT_TAG_OS, "OSRestart: relaunch failed (%lu)\n", static_cast<unsigned long>(GetLastError()));
+    }
+#endif
+    ExitCleanly("OSRestart");
+}
+REGISTER_NATIVE_WRAPPER_AS(0x8FFF005C, OSRestart_8fff005c, "OSRestart_8fff005c");
+
 // 0x801AE58C -> exit(int status)
 extern "C" uint32_t Exit_801AE58C(int status)
 {
@@ -142,7 +198,7 @@ extern "C" uint32_t Exit_801AE58C(int status)
     std::fflush(stderr);
     if (status != 0) {
         const std::string details =
-            "Mario Kart Wii called exit(" + std::to_string(status) + ").";
+            "The game called exit(" + std::to_string(status) + ").";
         RuntimeCrash::WriteCrashArtifacts("exit", details);
         ShowRuntimeFatalPopup("the game exited with an error status", details);
         MarkFatalErrorReported();

@@ -698,7 +698,7 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
         // Presentation policy (Force aspect ratio from F10) also applies live outside Mario Kart.
         UpdateMkwDynamicAspectSurface(1, 1);
     }
-    if (!::GuestRegion::IsMarioKart()) {
+    if (::GuestRegion::IsPokePark()) {
         // PokePark native 60 fps. Its logic always steps at 1/59.94 s (frame limiter 0); MainLoop waits on
         // limiter 1, the scene period, and MainGameLoopIteration runs period1/period0 logic steps per drawn
         // frame. The Park scene sets 2/59.94 s (2 logic steps per draw = 30 fps). Giving every scene the base

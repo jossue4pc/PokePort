@@ -371,6 +371,9 @@ list(REMOVE_ITEM SOURCES ${MKW_BASE_PRODUCT_SOURCE} ${MKW_RETRO_REWIND_PRODUCT_S
 include("${CMAKE_CURRENT_LIST_DIR}/cmake/PlatformTests.cmake")
 
 set(MKW_RUNTIME_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}")
+# Directory holding the translator's generated/ tree. One runtime checkout serves several games
+# (PokéPark, Rabbids...), each translated into its own workspace with its own build directory.
+set(MKW_GENERATED_ROOT "${CMAKE_CURRENT_LIST_DIR}/.." CACHE PATH "Directory that contains the translator's generated/ folder")
 include("${CMAKE_CURRENT_LIST_DIR}/cmake/RuntimeLibrary.cmake")
 
 # The prebuilt export also carries the game-independent runtime as a static
@@ -389,7 +392,7 @@ endif()
 # files and of optional Retro Rewind artifacts such as code.map.
 if(MKW_BUILD_PRODUCTS)
     set(MKW_TRANSLATED_SHARD_MANIFEST
-        "${CMAKE_CURRENT_LIST_DIR}/../generated/build_shards/shards.cmake"
+        "${MKW_GENERATED_ROOT}/generated/build_shards/shards.cmake"
         CACHE FILEPATH "Translator-owned aggregate shard manifest")
     # The prebuilt export only needs the aurora/third-party closure and the runtime
     # configured above, so a packaging machine without a translation stops here.

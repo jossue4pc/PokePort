@@ -1,3 +1,4 @@
+#include <atomic>
 #include <cstdlib>
 #include <vector>
 #include <mutex>
@@ -42,6 +43,7 @@ extern "C" void GX__SetDrawSync_8016ed08(uint32_t token) {
 // On hardware the PE raises a token interrupt when the GPU reaches this token and __GXTokenInterruptHandler
 // calls the GXSetDrawSyncCallback callback (TokenCB). MKWii never registers one; PokéPark recycles its two
 // frame slots from it (MainGameLoopIteration waits for a free slot), so for it the callback runs here.
+static bool DeliverGxBreakPoint(CpuContext* cpu);
 static std::mutex g_pokeparkTokenMutex;
 static std::vector<uint32_t> g_pokeparkPendingTokens;
 
@@ -60,8 +62,9 @@ extern "C" bool PokePark_ProcessDrawSyncTokens(CpuContext* cpu) {
         std::lock_guard<std::mutex> lock(g_pokeparkTokenMutex);
         tokens.swap(g_pokeparkPendingTokens);
     }
+    const bool breakPoint = DeliverGxBreakPoint(cpu);
     if (tokens.empty() || !cpu) {
-        return false;
+        return breakPoint;
     }
     const uint32_t kTokenCallbackAddr = MKW_GADDR(803867E0); // TokenCB (sbss, GXSetDrawSyncCallback)
     for (const uint32_t token : tokens) {
@@ -78,10 +81,68 @@ extern "C" bool PokePark_ProcessDrawSyncTokens(CpuContext* cpu) {
     return true;
 }
 
+// GX breakpoints (Rabbids' K3D frame queue: GXEnableBreakPt after each queued frame, BPCallback recycles
+// the buffer, and VIPostCallback counts retraces without it as a GPU hang). The HLE GPU consumes the FIFO
+// as it is written, so an enabled breakpoint is reached at once: the CP interrupt is delivered at the
+// next interrupt point, which first disables the breakpoint as __GXCPInterruptHandler does.
+static std::atomic<uint32_t> g_gxBreakPtCallback{0};
+static std::atomic<bool> g_gxBreakPtPending{false};
+
+extern "C" uint32_t GX__SetBreakPtCallback_8016d054(uint32_t callback) {
+    return g_gxBreakPtCallback.exchange(callback);
+}
+PPC_NATIVE_OVERRIDE(8016d054, GX__SetBreakPtCallback_8016d054, uint32_t, (uint32_t callback), (callback));
+
+extern "C" void GX__EnableBreakPt_8016d098(uint32_t breakPt) {
+    (void)breakPt;
+    g_gxBreakPtPending = true;
+}
+PPC_NATIVE_OVERRIDE_VOID(8016d098, GX__EnableBreakPt_8016d098, (uint32_t breakPt), (breakPt));
+
+extern "C" void GX__DisableBreakPt_8016d138() {
+    g_gxBreakPtPending = false;
+}
+PPC_NATIVE_OVERRIDE_VOID(8016d138, GX__DisableBreakPt_8016d138, (), ());
+
+// Resets the CP/PI FIFOs on hardware; the HLE GPU has nothing in flight.
+extern "C" void GX__AbortFrame_8016e848() {
+    g_gxBreakPtPending = false;
+}
+PPC_NATIVE_OVERRIDE_VOID(8016e848, GX__AbortFrame_8016e848, (), ());
+
+static bool DeliverGxBreakPoint(CpuContext* cpu) {
+    // At most one breakpoint per VI retrace: the GPU finishing one frame per field is what paces K3D's
+    // frame queue on hardware (an instant breakpoint lets the game outrun the display and overflow it).
+    static uint32_t s_lastRetrace = 0;
+    if (!cpu || !g_gxBreakPtPending.load()) {
+        return false;
+    }
+    const uint32_t retrace = Memory::Read32(MKW_GADDR(80386BE4)); // retraceCount
+    if (retrace == s_lastRetrace) {
+        return false;
+    }
+    s_lastRetrace = retrace;
+    g_gxBreakPtPending = false;
+    if (const uint32_t callback = g_gxBreakPtCallback.load(); callback != 0) {
+        InvokeIndirectCpu(callback, cpu);
+    }
+    return true;
+}
+
+static std::atomic<uint32_t> g_lastDrawSyncToken{0};
+
 extern "C" void GX__SetDrawSync_8016e9fc(uint32_t token) {
     GX__SetDrawSync_8016ed08(token);
+    g_lastDrawSyncToken = token & 0xFFFFu;
     PokeParkInvokeDrawSyncCallback(token);
 }
+
+// GXReadDrawSync reads the PE token register; the HLE GPU has reached every token as soon as it is set.
+// Synthetic identity (no MKWii counterpart): Rabbids' WGL_WaitDrawSync spins on it.
+extern "C" uint32_t GXReadDrawSync_8fff003c() {
+    return g_lastDrawSyncToken.load();
+}
+PPC_NATIVE_OVERRIDE(8FFF003C, GXReadDrawSync_8fff003c, uint32_t, (), ());
 PPC_NATIVE_OVERRIDE_VOID(8016e9fc, GX__SetDrawSync_8016e9fc, (uint32_t token), (token));
 
 extern "C" void GX__FinishInterruptHandler_8016ed94() {

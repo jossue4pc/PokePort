@@ -338,7 +338,11 @@ void SystemBridge::Initialize() {
     const uint32_t dolCtorEnd = MKW_GADDR(80244EA0);
 
     int dolCount = 0;
-    for (uint32_t addr = dolCtorStart; addr < dolCtorEnd; addr += 4) {
+    const bool preRunDolCtors = ::GuestRegion::CurrentFacts().preRunDolCtors;
+    if (!preRunDolCtors) {
+        RT_LOG(RT_TAG_RUNTIME) << "Main DOL static constructors left to the game's __init_cpp." << std::endl;
+    }
+    for (uint32_t addr = dolCtorStart; preRunDolCtors && addr < dolCtorEnd; addr += 4) {
         uint32_t funcAddr = 0;
         try {
             funcAddr = Memory::Read32(addr);
@@ -547,16 +551,25 @@ void SystemBridge::SeedLowMemDefaults(const Memory::Config& config) {
         }
     }
 
+    // A pre-translated run-time module has a fixed home above the game's MEM1 arena.
+    if (const uint32_t moduleBase = ::GuestRegion::CurrentFacts().rsoModuleBase;
+        moduleBase != 0 && moduleBase < mem1ArenaHiDefault) {
+        mem1ArenaHiDefault = moduleBase;
+        RT_LOG(RT_TAG_RUNTIME) << "MEM1 arena hi capped at 0x" << std::hex << std::uppercase << moduleBase
+                               << " for the fixed RSO module" << std::dec << std::nouppercase << std::endl;
+    }
+
     // Seed OS clock values used by SDK timing helpers (OSBusClock/OSClock).
     entries.push_back({0x800000F8u, kBusClockHz, "__OSBusClock"});
     entries.push_back({0x800000FCu, kCpuClockHz, "__OSClock"});
-    // PokéPark (R8AE01) boots under IOS56: its OSInit requires the running IOS major (0x80003140)
-    // to equal the title's expected IOS (0x80003188, written by the apploader) and to be at least as new.
-    constexpr uint32_t kIos56Version = 0x0038161Du; // IOS56 v5661
-    const uint32_t iosVersion = ::GuestRegion::IsMarioKart() ? kIos36Version : kIos56Version;
+    // Other games boot under their own IOS (PokéPark IOS56, Rabbids IOS55): their OSInit requires the
+    // running IOS major (0x80003140) to equal the title's expected IOS (0x80003188, written by the
+    // apploader) and to be at least as new.
+    static_assert(kIos36Version == 0x00240E18u);
+    const uint32_t iosVersion = ::GuestRegion::CurrentFacts().iosVersion;
     entries.push_back({0x80003140u, iosVersion, "IOS version"});
     if (!::GuestRegion::IsMarioKart()) {
-        entries.push_back({0x80003188u, kIos56Version, "Title expected IOS version"});
+        entries.push_back({0x80003188u, iosVersion, "Title expected IOS version"});
     }
     entries.push_back({0x80003144u, kIos36Date, "IOS36 date"});
 
@@ -582,7 +595,12 @@ void SystemBridge::SeedLowMemDefaults(const Memory::Config& config) {
         // Reserve FST memory before guest code can use this part of the arena.
         g_dvdFstReservedSize = kDvdFstReserveSize;
         g_dvdFstReservedBase = ipcBufLo - kDvdFstReserveSize;
-        const uint32_t mem2ArenaHi = g_dvdFstReservedBase;
+        uint32_t mem2ArenaHi = g_dvdFstReservedBase;
+        // ...and its tables live in MEM2 above the game's arena.
+        if (const auto& facts = ::GuestRegion::CurrentFacts(); facts.rsoScratchSize != 0 &&
+            facts.rsoScratchBase + facts.rsoScratchSize <= mem2ArenaHi) {
+            mem2ArenaHi = facts.rsoScratchBase;
+        }
 
         entries.push_back({0x80003118u, mem2Size, "Physical MEM2 size", true});
         entries.push_back({0x8000311Cu, mem2Size, "Simulated MEM2 size", true});
